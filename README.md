@@ -5,11 +5,6 @@ Minimal, from-scratch [Zephyr RTOS](https://www.zephyrproject.org/) workspace fo
 that reproduces the entire installation — RTOS clone, HAL modules, Python venv,
 toolchain, build, and flash — on another Windows machine.
 
-> `C:\zw` throughout this README (and `RUNBOOK.md`) is just an example path, not a
-> requirement — use whatever directory you like. Keep it **short**, though: Zephyr's
-> build tree nests deeply, and a long workspace path can hit Windows' ~260-character
-> path limit (see "Path too long" in `RUNBOOK.md` → Troubleshooting).
-
 ## Contents
 
 - [Executive summary](#executive-summary)
@@ -36,6 +31,9 @@ microcontroller**, or does it need a beefier part to be worth using?
 - Fully reproducible setup: one script rebuilds the whole toolchain (Zephyr, HAL
   modules, SDK, Python deps) from scratch on any Windows machine, pinned to exact
   versions
+- Lean by construction: only the Zephyr modules this board actually needs are cloned
+  (not the dozens of unrelated HALs/subsystems a default `west update` would pull in),
+  keeping the whole installation **under 2 GB** instead of several GB
 - VS Code integration: build/flash tasks, source-line debugging, IntelliSense
 - Only **33.50% RAM / 27.13% flash** used of this board's 8 KB RAM / 60 KB flash
 
@@ -59,6 +57,11 @@ Where to go from here:
   command parser — Zephyr itself isn't the heavy part.
 
 ## Quick start
+
+> `C:\zw` throughout this README (and `RUNBOOK.md`) is just an example path, not a
+> requirement — use whatever directory you like. Keep it **short**, though: Zephyr's
+> build tree nests deeply, and a long workspace path can hit Windows' ~260-character
+> path limit (see "Path too long" in `RUNBOOK.md` → Troubleshooting).
 
 On a machine already set up (venv, SDK, and workspace in place):
 
