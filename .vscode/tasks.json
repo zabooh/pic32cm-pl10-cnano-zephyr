@@ -1,0 +1,101 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Zephyr: Build (pristine)",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/Scripts/west.exe",
+            "args": [
+                "build",
+                "-p", "always",
+                "-b", "pic32cm_pl10_cnano",
+                "-d", "${workspaceFolder}/build",
+                "${workspaceFolder}/app",
+                "--",
+                "-DCMAKE_EXPORT_COMPILE_COMMANDS=1"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/zephyr",
+                "env": { "CMAKE_GENERATOR": "Ninja" }
+            },
+            "problemMatcher": ["$gcc"],
+            "group": { "kind": "build", "isDefault": true },
+            "presentation": { "reveal": "always", "panel": "shared" }
+        },
+        {
+            "label": "Zephyr: Build (incremental)",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/Scripts/west.exe",
+            "args": [
+                "build",
+                "-d", "${workspaceFolder}/build"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/zephyr",
+                "env": { "CMAKE_GENERATOR": "Ninja" }
+            },
+            "problemMatcher": ["$gcc"],
+            "group": "build",
+            "presentation": { "reveal": "always", "panel": "shared" }
+        },
+        {
+            "label": "Zephyr: Flash",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/Scripts/west.exe",
+            "args": ["flash"],
+            "options": { "cwd": "${workspaceFolder}/build" },
+            "dependsOn": "Zephyr: Build (pristine)",
+            "problemMatcher": [],
+            "presentation": { "reveal": "always", "panel": "shared" }
+        },
+        {
+            "label": "Zephyr: Menuconfig",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/Scripts/west.exe",
+            "args": ["build", "-d", "${workspaceFolder}/build", "-t", "menuconfig"],
+            "options": { "cwd": "${workspaceFolder}/zephyr" },
+            "problemMatcher": [],
+            "presentation": { "reveal": "always", "panel": "shared" }
+        },
+        {
+            "label": "Zephyr: Clean build dir",
+            "type": "shell",
+            "command": "powershell",
+            "args": ["-NoProfile", "-Command", "Remove-Item -Recurse -Force '${workspaceFolder}/build' -ErrorAction SilentlyContinue"],
+            "problemMatcher": [],
+            "presentation": { "reveal": "silent", "panel": "shared" }
+        },
+        {
+            // Long-running background task: starts the pyOCD GDB server and leaves it
+            // running in its own terminal. Used together with the "external" servertype
+            // debug config (Cortex-Debug 1.12.1 has a known bug where it fails to detect
+            // its own auto-launched pyOCD server as ready - see RUNBOOK.md Step 11c).
+            // Run this task, wait for "GDB server listening on port 3333" in the
+            // terminal, THEN start the "attach to running GDB server" debug config.
+            "label": "Zephyr: Start GDB Server (pyOCD)",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/Scripts/pyocd.exe",
+            "args": [
+                "gdbserver",
+                "-t", "pic32cm6408pl10048",
+                "-f", "2000000",
+                "--elf", "${workspaceFolder}/build/zephyr/zephyr.elf"
+            ],
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": "^(?:NEVER_MATCHES_ANYTHING)$",
+                    "file": 1,
+                    "location": 2,
+                    "message": 3
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".*Target type is.*",
+                    "endsPattern": ".*GDB server listening on port.*"
+                }
+            },
+            "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+        }
+    ]
+}

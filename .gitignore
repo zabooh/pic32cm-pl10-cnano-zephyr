@@ -1,0 +1,15 @@
+# West workspace state and fetched projects - reproduced by reproduce-install.ps1,
+# not hand-maintained. See CLAUDE.md "What this is".
+/zephyr/
+/modules/
+/.west/
+
+# Python venv - reproduced by reproduce-install.ps1 from requirements-lock.txt.
+/.venv/
+
+# Build output.
+/build/
+
+# Convenience zip for the pre-git reproduction flow - redundant now that this
+# directory itself is a git repo (clone instead of extract-and-run).
+/pic32cm-pl10-reproduction.zip

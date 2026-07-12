@@ -1,0 +1,72 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // NOTE: deliberately no "preLaunchTask" here. VS Code's preLaunchTask wait
+            // is unreliable with a build this long (known upstream bugs, e.g.
+            // microsoft/vscode#54397, #263017) - it can start the debug adapter before
+            // the build actually finishes, causing a spurious "Unable to find executable
+            // file" error. Always run "Zephyr: Build (pristine)" or "Zephyr: Flash"
+            // manually first and wait for it to finish in the terminal, THEN launch this.
+            "name": "Zephyr: Flash & Debug (pyOCD) - build first!",
+            "type": "cortex-debug",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
+            "servertype": "pyocd",
+            "serverpath": "${workspaceFolder}/.venv/Scripts/pyocd.exe",
+            "device": "pic32cm6408pl10048",
+            "interface": "swd",
+            "serverArgs": ["-f", "2000000"],
+            "armToolchainPath": "${env:USERPROFILE}/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin",
+            "toolchainPrefix": "arm-zephyr-eabi",
+            "runToEntryPoint": "main",
+            "showDevDebugOutput": "raw"
+        },
+        {
+            // postAttachCommands: force a fresh "monitor reset halt" right after
+            // attaching. Without this, attaching to a target that's already mid-way
+            // through k_msleep()/sleep cycles reproducibly causes SWD "FAULT ACK" errors
+            // (this board's debug port becomes intermittently inaccessible while the CPU
+            // is asleep) - confirmed on this project. Resetting first means execution
+            // starts fresh from the reset vector, reaching any breakpoint in main()
+            // before the first sleep cycle ever happens. See RUNBOOK.md Step 11c/11e.
+            "name": "Zephyr: Attach & Debug (pyOCD, no reflash)",
+            "type": "cortex-debug",
+            "request": "attach",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
+            "servertype": "pyocd",
+            "serverpath": "${workspaceFolder}/.venv/Scripts/pyocd.exe",
+            "device": "pic32cm6408pl10048",
+            "interface": "swd",
+            "serverArgs": ["-f", "2000000"],
+            "armToolchainPath": "${env:USERPROFILE}/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin",
+            "toolchainPrefix": "arm-zephyr-eabi",
+            "postAttachCommands": ["monitor reset halt"],
+            "showDevDebugOutput": "raw"
+        },
+        {
+            // Most reliable option if the two configs above throw "GDB Server Quit
+            // Unexpectedly" / "Failed to launch PyOCD GDB Server: Timeout" - a known,
+            // currently-unresolved Cortex-Debug 1.12.1-on-Windows bug where it fails to
+            // detect its own auto-launched pyOCD server as ready, even though the server
+            // itself started fine (see RUNBOOK.md Step 11c for the upstream issue links).
+            // Workflow: run task "Zephyr: Start GDB Server (pyOCD)" first, wait for
+            // "GDB server listening on port 3333" in its terminal, THEN launch this.
+            // Also uses postAttachCommands to reset-and-halt first - see the comment on
+            // the "Attach & Debug (pyOCD, no reflash)" config above for why.
+            "name": "Zephyr: Debug (attach to running GDB server) - start server task first!",
+            "type": "cortex-debug",
+            "request": "attach",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
+            "servertype": "external",
+            "gdbTarget": "localhost:3333",
+            "armToolchainPath": "${env:USERPROFILE}/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin",
+            "toolchainPrefix": "arm-zephyr-eabi",
+            "postAttachCommands": ["monitor reset halt"],
+            "showDevDebugOutput": "raw"
+        }
+    ]
+}

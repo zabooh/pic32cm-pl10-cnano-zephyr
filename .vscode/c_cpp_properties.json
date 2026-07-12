@@ -1,0 +1,13 @@
+{
+    "version": 4,
+    "configurations": [
+        {
+            "name": "Zephyr (PIC32CM PL10)",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+            "compilerPath": "${env:USERPROFILE}/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc.exe",
+            "cStandard": "gnu11",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "gcc-arm"
+        }
+    ]
+}
