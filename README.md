@@ -169,6 +169,36 @@ All tasks call `west`/`pyocd` directly from `.venv/Scripts/` (no need to activat
 venv first) and use the pinned `pyocd==0.43.0` explicitly, so Cortex-Debug can't
 accidentally pick up a different (broken) pyOCD from `PATH`.
 
+### Recommended workflow: source-line debugging after build & flash
+
+The two "auto-launch" debug configs above start pyOCD's GDB server themselves, but a
+known Cortex-Debug 1.12.1-on-Windows bug (see the warning below) makes that path fail
+intermittently. The reliable path is to start the GDB server yourself as a separate,
+long-lived task and then just *attach* Cortex-Debug to it:
+
+1. **Build, then flash** — Terminal → Run Task → *Zephyr: Build (pristine)*, wait for it
+   to finish, then Terminal → Run Task → *Zephyr: Flash*. (Skip this if the board is
+   already running the binary you want to debug.)
+2. **Start the GDB server** — Terminal → Run Task → *Zephyr: Start GDB Server (pyOCD)*.
+   This runs `pyocd gdbserver` in its own dedicated terminal panel and stays running.
+   Wait until that terminal prints `GDB server listening on port 3333` — don't move on
+   before this line appears.
+3. **Set a breakpoint** — open `app/src/main.c` and click in the gutter on a line
+   *inside* a function body (e.g. `main.c:64`). Don't put it on `while (1) {` itself —
+   that line only ever fires once per debug session (see `RUNBOOK.md` troubleshooting
+   table).
+4. **Attach** — open the Run and Debug panel (`Ctrl+Shift+D`), pick *Zephyr: Debug
+   (attach to running GDB server) - start server task first!* from the dropdown, and
+   press F5 (or the green play button). This config's `postAttachCommands` runs
+   `monitor reset halt` automatically, so the CPU starts from the reset vector instead of
+   attaching mid-sleep-cycle (see the third warning below for why that matters).
+5. Execution stops at the reset vector; press **Continue** (F5) to run until your
+   breakpoint hits. From there, step/inspect variables/watch expressions as normal.
+6. When done, stop the debug session (Shift+F5) and separately stop the *Zephyr: Start
+   GDB Server (pyOCD)* task (trash-can icon in its terminal panel, or `Ctrl+C` in it) —
+   only one `pyocd gdbserver` can hold the USB probe at a time, so leaving a stale one
+   running will make the next attach fail.
+
 > ⚠️ **Always build first, separately, before debugging.** Neither debug config auto-builds
 > (no `preLaunchTask`) — VS Code's preLaunchTask wait is unreliable for a build this long
 > and can start the debugger before the build actually finishes, causing a spurious
