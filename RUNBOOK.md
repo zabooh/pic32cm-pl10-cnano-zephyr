@@ -818,10 +818,16 @@ Useful commands from there: `next`/`n` (step over), `step`/`s` (step into), `con
 
 ## Appendix A — Detailed memory analysis
 
-The README's "Memory usage" section only shows the current, final numbers. This appendix
-has the full history and breakdown behind them.
+> **Note:** these figures capture the project's original **bare-blinky** build progression
+> (single `main.c`, `console_getline()`, one app thread). The app has since grown an ADC
+> read/stream, a reset, per-domain source files, a `console_getchar()`-based parser with
+> command history, and three application threads — its current totals are higher (see the
+> README's "Memory usage" section for the live numbers). The analysis below stands as the
+> record of *how the lean baseline was reached*; it is not the current footprint.
 
-**Across the four build versions this project went through:**
+This appendix has the full history and breakdown behind the original lean baseline.
+
+**Across the four build versions the original blinky went through:**
 
 | Version | RAM | Flash |
 |---|---|---|

@@ -23,11 +23,15 @@ toolchain, build, and flash — on another Windows machine.
 
 ## Executive summary
 
-This is a blinky application — LED on/off/toggle/blink over a serial command line —
-built to answer one question: **can Zephyr RTOS run comfortably on an 8 KB-RAM
-microcontroller**, or does it need a beefier part to be worth using?
+This is a small interactive firmware — LED control, ADC sampling, and a reset over a
+serial command line — built to answer one question: **can Zephyr RTOS run comfortably on
+an 8 KB-RAM microcontroller**, or does it need a beefier part to be worth using?
 
-- Interactive serial commands: `led on/off/toggle/blink <ms>`, `help`
+- Interactive serial commands: `led on/off/toggle/blink <ms>`, `adc read`,
+  `adc stream start/stop`, `reset`, `help` — with a hand-rolled line editor featuring
+  bash-style Up/Down command history, and a boot banner stamped with the build time
+- Genuinely multi-threaded: five threads (LED blink, ADC stream, command console, plus
+  the kernel's main/idle) — a real RTOS app, not a superloop
 - Fully reproducible setup: one script rebuilds the whole toolchain (Zephyr, HAL
   modules, SDK, Python deps) from scratch on any Windows machine, pinned to exact
   versions
@@ -35,7 +39,8 @@ microcontroller**, or does it need a beefier part to be worth using?
   (not the dozens of unrelated HALs/subsystems a default `west update` would pull in),
   keeping the whole installation **under 2 GB** instead of several GB
 - VS Code integration: build/flash tasks, source-line debugging, IntelliSense
-- Only **33.50% RAM / 27.13% flash** used of this board's 8 KB RAM / 60 KB flash
+- Only **52% RAM / 29% flash** used of this board's 8 KB RAM / 60 KB flash — half the RAM
+  still free with all of the above running
 
 Where to go from here:
 - Just want to build and flash it? → [Quick start](#quick-start)
@@ -46,15 +51,16 @@ Where to go from here:
 
 - Zephyr RTOS runs comfortably on the PIC32CM PL10's 8 KB RAM — contrary to the common
   assumption that it needs a bigger part.
-- Final footprint is 2,744 B RAM (33.50%) — smaller than a comparable hand-tuned
-  CMSIS/RTX5 application on the same chip (see [Memory usage](#memory-usage)).
+- A real multi-threaded interactive app (LED blink + ADC streaming + a command console
+  with history, five threads total) still leaves **~48% of RAM free** — 4,264 B used of
+  8 KB. A bare blinky started even lower (2,744 B / 33.50%; see [Memory usage](#memory-usage)).
 - The entire toolchain — Zephyr revision, HAL modules, SDK, Python packages — is
   version-pinned and reproducible with one script on a fresh Windows machine.
 - Source-line debugging works reliably in VS Code once a couple of Windows-specific
   Cortex-Debug/pyOCD quirks are worked around (documented once, not re-discovered every
   time — see [Known issues](#known-issues)).
-- The RAM win came specifically from replacing Zephyr's shell subsystem with a minimal
-  command parser — Zephyr itself isn't the heavy part.
+- Staying lean is a choice, not luck: no Zephyr shell subsystem (a hand-rolled parser
+  instead), only the four HAL/lib modules this board needs, and trimmed kernel stacks.
 
 ## Quick start
 
@@ -92,16 +98,25 @@ west flash
 > activating works for `build` but not for `flash`. See [Known issues](#known-issues).
 
 Connect a serial terminal (PuTTY, TeraTerm, ...) to the board's virtual COM port at
-**115200 baud**. The prompt `pl10:~$ ` appears. Type a command and press Enter, it echoes
-back, prints the response, then shows the prompt again. Try `help` for the command list:
+**115200 baud**. A boot banner with the build timestamp prints, then the prompt
+`pl10:~$ `. Type a command and press Enter; **Up/Down arrow** recalls the last five
+commands. Try `help` for the full list:
 
 ```
 pl10:~$ led on
-pl10:~$ led off
-pl10:~$ led toggle
 pl10:~$ led blink 100
-pl10:~$ led blink 1000
+pl10:~$ adc read
+adc: 3676 (2.962 V)
+pl10:~$ adc stream start
+adc: streaming every 500 ms
+adc: 3688 (2.972 V)
+...
+pl10:~$ adc stream stop
+pl10:~$ reset
 ```
+
+(On the bare board the ADC input pin floats, so `adc read` returns noisy values near the
+supply rail — that's expected, it confirms the ADC is actually converting.)
 
 Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reproducing-this-setup-elsewhere).
 
@@ -109,7 +124,7 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 
 | Path | Purpose |
 |---|---|
-| `app/` | The application: `CMakeLists.txt`, `prj.conf`, `src/main.c` (blinky + `led` command parser over `console_getline()`) |
+| `app/` | The application: `CMakeLists.txt`, `prj.conf`, and `src/` split one module per domain — `main.c` (startup wiring), `led_ctrl.c` (LED + blink thread), `pl10_adc.c` (ADC driver + stream thread), `cmd_parser.c` (console, line editor, history) |
 | `zephyr/` | Zephyr RTOS source (shallow clone, pinned revision) |
 | `modules/` | Only the HAL/library modules actually needed: `hal_microchip`, `cmsis`, `cmsis_6`, `picolibc` |
 | `build/` | CMake/Ninja build output; `build/zephyr/zephyr.hex` is the flashable artifact |
@@ -127,30 +142,36 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 
 ### Architecture
 
+The app is split one module per functional domain, each owning its own thread. No shell
+subsystem — the command console is hand-rolled on `console_getchar()`.
+
 ```
-+-------------------------------------+
-|  app/src/main.c                      |
-|  LED command parser over             |
-|  console_getline() (no shell subsys) |
-+-------------------+-------------------+
-                    |
-                    v
-+-------------------------------------+
-|  Zephyr RTOS kernel                  |
-|  k_timer (blink), GPIO + UART drivers |
-+-------------------+-------------------+
-                    |
-                    v
-+-------------------------------------+
-|  HAL / library modules                |
-|  hal_microchip, cmsis, cmsis_6,      |
-|  picolibc                             |
-+-------------------+-------------------+
-                    |
-                    v
-+-------------------------------------+
-|  PIC32CM PL10 (Arm Cortex-M0+)        |
-+-------------------------------------+
+  app/src/  (5 threads: main + idle + the three below)
+
+  +----------------+   +----------------+   +-------------------+
+  | cmd_parser.c   |   | led_ctrl.c     |   | pl10_adc.c        |
+  | cmd_tid        |   | blink_tid      |   | adc_stream_tid    |
+  | console_getchar|   | GPIO + blink   |   | ADC0 registers +  |
+  | line editor,   |-->| (led_ctrl.h)   |   | read/stream       |
+  | history,       |-->|                |   | (pl10_adc.h)      |
+  | dispatch       |------------------------>|                   |
+  +-------+--------+   +-------+--------+   +---------+---------+
+          |                   |                      |
+          v                   v                      v
+  +-----------------------------------------------------------+
+  |  Zephyr RTOS kernel   (GPIO, UART, clock drivers)         |
+  +----------------------------+------------------------------+
+                               v
+  +-----------------------------------------------------------+
+  |  HAL / library modules: hal_microchip, cmsis, cmsis_6,    |
+  |  picolibc   (ADC0 register defs come from hal_microchip)  |
+  +----------------------------+------------------------------+
+                               v
+  +-----------------------------------------------------------+
+  |  PIC32CM PL10  (Arm Cortex-M0+)                            |
+  +-----------------------------------------------------------+
+
+  main.c: startup wiring only (led_ctrl_init + default blink).
 ```
 
 ## Working in VS Code
@@ -186,9 +207,11 @@ explicitly, so Cortex-Debug can't accidentally pick up a different (broken) pyOC
 2. **Start the GDB server** — Terminal → Run Task → *Zephyr: Start GDB Server (pyOCD)*.
    This runs `pyocd gdbserver` in its own dedicated terminal panel and stays running.
    Wait until that terminal prints `GDB server listening on port 3333` before moving on.
-3. **Set a breakpoint** — open `app/src/main.c` and click in the gutter on a line
-   *inside* a function body (e.g. `main.c:64`). Don't put it on `while (1) {` itself —
-   that line only ever fires once per debug session (see [Known issues](#known-issues)).
+3. **Set a breakpoint** — open one of the app sources and click in the gutter on a line
+   *inside* a function body — e.g. a command handler in `app/src/cmd_parser.c`, or a line
+   inside a thread's `while (1)` loop body (`cmd_parser.c`, `led_ctrl.c`). Don't put it on
+   the `while (1) {` line itself — that only ever fires once per debug session (see
+   [Known issues](#known-issues)).
 4. **Attach** — open the Run and Debug panel (`Ctrl+Shift+D`), pick *Zephyr: Debug
    (attach to running GDB server) - start server task first!* from the dropdown, and
    press F5. This config's `postAttachCommands` runs `monitor reset halt` automatically,
@@ -264,9 +287,9 @@ How that's achieved:
   flashing goes through pyOCD, not OpenOCD/QEMU.
 - **Python deps**: only `zephyr/scripts/requirements-base.txt` plus `pyocd` — not
   Zephyr's full test/compliance requirement set.
-- **The firmware itself**: no shell subsystem — a minimal `console_getline()`-based
-  command parser instead, with a hand-written `pl10:~$ ` prompt and `help` command for UX
-  parity.
+- **The firmware itself**: no shell subsystem — a hand-rolled command parser on
+  `console_getchar()` instead, with a `pl10:~$ ` prompt, `help`, and bash-style Up/Down
+  history for UX parity at a fraction of the shell's RAM.
 
 Net result: a full, working toolchain and firmware in a few hundred MB instead of the
 several GB a default Zephyr installation would use.
@@ -282,24 +305,29 @@ commit. Full explanation and the 5-step procedure for moving the pin forward: `R
 ## Memory usage
 
 This board has only 8 KB RAM / 60 KB flash, so usage is worth watching, not just "does it
-fit." Current build:
+fit." Current build (LED blink + ADC + command console with history, five threads):
 
 | | Used | Capacity | % used |
 |---|---|---|---|
-| RAM | 2,744 B | 8,192 B | **33.50%** |
-| Flash | 16,668 B | 61,440 B | **27.13%** |
+| RAM | 4,264 B | 8,192 B | **52.05%** |
+| Flash | 17,496 B | 61,440 B | **28.48%** |
 
 Check live numbers with `west build -d C:\zw\build -t ram_report` / `-t rom_report`
 (per-symbol breakdown).
 
-Most of this budget was won by dropping the Zephyr shell subsystem for a minimal
-`console_getline()`-based parser — the shell alone used ~40-47% of RAM for four trivial
-GPIO commands — plus trimming the kernel's fixed interrupt/main stacks. The result lands
-in the same ballpark as a hand-tuned CMSIS/RTX5 application on the same chip, and pulls
-ahead once those kernel stacks are trimmed.
+Roughly half the RAM is the three application threads — each `k_thread` costs its stack
+(256 B blink, 320 B ADC stream, 640 B console) plus a 120 B thread control block, all
+directly visible in `ram_report`. The rest is kernel scaffolding, itself trimmed
+(`ISR_STACK_SIZE` 2048→1024, `MAIN_STACK_SIZE` 1024→512). Staying this lean is
+deliberate: no Zephyr shell subsystem (a hand-rolled `console_getchar()` parser instead,
+which alone saved the shell's ~40-47% of RAM), only the four HAL/lib modules this board
+needs, `CONFIG_LOG=n`.
 
-Full version-by-version numbers, the per-module `ram_report`/`rom_report` breakdown, the
-CMSIS/RTX5 comparison, and the measured per-thread RAM cost: `RUNBOOK.md` → Appendix A.
+A bare blinky earlier in this project's history sat at just 2,744 B (33.50%). Full
+version-by-version numbers, the per-module `ram_report`/`rom_report` breakdown, a
+comparison against a hand-tuned CMSIS/RTX5 app on the same chip, and the measured
+per-thread RAM cost: `RUNBOOK.md` → Appendix A (those figures predate the ADC/threads/
+history work — this section has the current totals).
 
 ## Known issues
 
