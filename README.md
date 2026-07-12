@@ -1,54 +1,11 @@
 # PIC32CM PL10 Curiosity Nano — Lean Zephyr Blinky
 
-> ## Got this as `pic32cm-pl10-reproduction.zip`? Start here.
->
-> This zip is a **self-contained reproduction package**: the application source, VS Code
-> integration, all docs, and one pinned script that rebuilds the *entire* Zephyr workspace
-> around them — full RTOS clone, HAL modules, Python venv, toolchain — on any Windows
-> machine. It does **not** contain the Zephyr source, modules, venv, or build output
-> themselves; the script fetches all of that. Extract the zip, run one script, the rest
-> happens on its own:
->
-> ```powershell
-> # 1. Extract the zip into an empty target directory, e.g. C:\zw2
-> Expand-Archive -Path pic32cm-pl10-reproduction.zip -DestinationPath C:\zw2
->
-> # 2. Move into that directory and run the script with a relative path
-> Set-Location C:\zw2
-> powershell -ExecutionPolicy Bypass -File reproduce-install.ps1
-> ```
->
-> Step 2 matters: the script determines its target directory from `$PSScriptRoot` — the
-> actual location of the `.ps1` file being run, not your terminal's starting directory.
-> `cd` into the extracted folder first and call the script by its bare filename (not a full
-> path to some other copy) so `$PSScriptRoot` — and therefore everything the script
-> builds — resolves to *that* folder. Calling a copy elsewhere by full path (e.g. an old
-> `C:\zw\reproduce-install.ps1` left over from a previous setup) builds into *that* folder
-> instead, which is a common mix-up if more than one copy of this project exists on the
-> same machine.
->
-> That's it. The script clones the pinned Zephyr revision, fetches only the four modules
-> this board needs, installs the pinned SDK and Python packages, builds the app, and
-> flashes the board — finishing with `Reproduction complete.` in green. Expect roughly
-> 10-20 minutes depending on network speed (most of it is the Zephyr/module clone and SDK
-> download).
->
-> **Two things the script does *not* do for you:**
-> - **Prerequisites** — Python (3.12+), Git, Ninja, CMake, and 7-Zip must already be on
->   `PATH` on the target machine. The script only checks for them and stops with a clear
->   error if one is missing; it does not install them.
-> - **Board connection** — the PIC32CM PL10 Curiosity Nano must be plugged in via USB
->   *before* the script reaches its last step (`pyocd flash`). Everything before that
->   (venv, workspace, SDK, build) succeeds without the board attached.
->
-> See ["Reproducing this setup elsewhere"](#reproducing-this-setup-elsewhere) below for
-> exactly what's pinned and why, and the VS Code section for one caveat about hardcoded SDK
-> paths if you also want debugging to work on a different machine.
-
 A minimal, from-scratch [Zephyr RTOS](https://www.zephyrproject.org/) workspace for the
 **Microchip PIC32CM PL10 Curiosity Nano** board: a blinky application with a minimal
-serial command interface for interactively controlling the LED, plus a pinned,
-non-interactive script that reproduces this exact installation elsewhere.
+serial command interface for interactively controlling the LED (`led on/off/toggle/blink
+<ms>`), plus a pinned, non-interactive script that reproduces this exact installation —
+full RTOS clone, HAL modules, Python venv, toolchain, build, and flash — on any Windows
+machine.
 
 > The app originally used the full Zephyr shell subsystem; it was replaced with a
 > lightweight `console_getline()`-based parser once RAM profiling showed the shell alone
@@ -57,6 +14,47 @@ non-interactive script that reproduces this exact installation elsewhere.
 
 Built by following [`RUNBOOK.md`](RUNBOOK.md), which also documents every pitfall hit
 along the way — read it if you need to redo or extend this setup.
+
+## Clone and reproduce this setup
+
+```powershell
+git clone https://github.com/zabooh/pic32cm-pl10-cnano-zephyr.git C:\zw2
+Set-Location C:\zw2
+powershell -ExecutionPolicy Bypass -File reproduce-install.ps1
+```
+
+`cd` into the clone first and call the script by its bare filename (not a full path to
+some other copy). The script determines its target directory from `$PSScriptRoot` — the
+actual location of the `.ps1` file being run, not your terminal's starting directory — so
+everything it builds resolves to *that* clone. Calling a copy elsewhere by full path
+(e.g. an old `C:\zw\reproduce-install.ps1` left over from a previous setup) builds into
+*that* folder instead, which is a common mix-up if more than one copy of this project
+exists on the same machine.
+
+The script clones the pinned Zephyr revision, fetches only the four modules this board
+needs, installs the pinned SDK and Python packages, builds the app, and flashes the
+board — finishing with `Reproduction complete.` in green. Expect roughly 10-20 minutes
+depending on network speed (most of it is the Zephyr/module clone and SDK download).
+
+> **Everything this script installs is version-pinned** — Zephyr revision, the four HAL/
+> library modules, SDK version, and every Python package (`requirements-lock.txt`) — so
+> two runs on different machines produce the same toolchain, not whatever happens to be
+> "latest" that day. Nothing here auto-updates. If you need a newer library/module version
+> or a driver added to Zephyr mainline after this pin, see ["What `west update` actually
+> does (and doesn't)"](#what-west-update-actually-does-and-doesnt) further down for the
+> deliberate steps to move the pin forward.
+
+**Two things the script does *not* do for you:**
+- **Prerequisites** — Python (3.12+), Git, Ninja, CMake, and 7-Zip must already be on
+  `PATH` on the target machine. The script only checks for them and stops with a clear
+  error if one is missing; it does not install them.
+- **Board connection** — the PIC32CM PL10 Curiosity Nano must be plugged in via USB
+  *before* the script reaches its last step (`pyocd flash`). Everything before that
+  (venv, workspace, SDK, build) succeeds without the board attached.
+
+See ["Reproducing this setup elsewhere"](#reproducing-this-setup-elsewhere) below for
+exactly what's pinned and why, and the VS Code section for one caveat about hardcoded SDK
+paths if you also want debugging to work on a different machine.
 
 ## Build & flash — `cmd.exe`, from `C:\zw`
 
@@ -230,31 +228,32 @@ accidentally pick up a different (broken) pyOCD from `PATH`.
 ## Reproducing this setup elsewhere
 
 `reproduce-install.ps1` is **portable**: it builds the workspace in whatever directory it
-itself is located in (via `$PSScriptRoot`), not a hardcoded path. The easiest way to get
-all the files it needs next to it is `pic32cm-pl10-reproduction.zip` — see the callout at
-the very top of this README for the two-command extract-and-run flow.
+itself is located in (via `$PSScriptRoot`), not a hardcoded path. The recommended way to
+get it and the two files it needs next to it (`requirements-lock.txt`, `app\`) is a plain
+`git clone` — see ["Clone and reproduce this setup"](#clone-and-reproduce-this-setup) at
+the top of this README for the two-command flow.
 
-If you don't have the zip (e.g. copying straight from this machine or a network share
-instead), the same result is achieved by copying the three reproduction items into a
-target directory yourself before running the script:
+If you're copying straight from this machine or a network share instead of cloning, the
+same result is achieved by copying the three reproduction items into a target directory
+yourself before running the script:
 
 ```powershell
-New-Item -ItemType Directory -Force -Path C:\zw | Out-Null
-Copy-Item <source>\reproduce-install.ps1  C:\zw\
-Copy-Item <source>\requirements-lock.txt  C:\zw\
-Copy-Item <source>\app -Destination C:\zw\app -Recurse
+New-Item -ItemType Directory -Force -Path C:\zw2 | Out-Null
+Copy-Item <source>\reproduce-install.ps1  C:\zw2\
+Copy-Item <source>\requirements-lock.txt  C:\zw2\
+Copy-Item <source>\app -Destination C:\zw2\app -Recurse
 
-Set-Location C:\zw
+Set-Location C:\zw2
 powershell -ExecutionPolicy Bypass -File reproduce-install.ps1
 ```
 
 Calling it by relative filename after `Set-Location` (rather than a full path) avoids
-accidentally pointing at a different copy of the script elsewhere on the machine — see the
-callout at the top of this README for why that matters.
+accidentally pointing at a different copy of the script elsewhere on the machine — see
+"Clone and reproduce this setup" at the top of this README for why that matters.
 
 (`<source>` is wherever you staged/transferred the three files from.) The script itself
 does **not** fetch or copy `requirements-lock.txt`/`app\` — they must already sit next to
-it before it runs, which is exactly what the zip package provides in one step.
+it before it runs, which is exactly what `git clone` provides in one step.
 
 This is fully non-interactive and pins every moving part: the exact Zephyr commit, west
 version, SDK version, module filters, Python package versions (via
