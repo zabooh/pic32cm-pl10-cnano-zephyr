@@ -463,10 +463,31 @@ threads (vs. ~8-10 estimated against the pre-trim baseline) before RAM becomes t
 constraint — fine for a handful of concurrent tasks, but the fixed Zephyr baseline (not
 per-thread cost) is what limits how far this scales on an 8 KB part.
 
-## Further reading
+## What is `RUNBOOK.md`?
 
-See [`RUNBOOK.md`](RUNBOOK.md) for the full step-by-step procedure, the reasoning behind
-each filter/flag, and a troubleshooting table covering every issue actually encountered
-while building this (Windows file-lock quirks during `west init`, the `west packages pip
---install` trap, the 7-Zip-on-PATH requirement for SDK setup, and the pyOCD version bug
-above).
+This README documents how to *use* the workspace. `RUNBOOK.md` documents how it was
+*built* — the step-by-step log the whole thing was constructed from, written as
+instructions an agent actually followed (see its "Task" and "Constraints" sections at the
+top), not a retrospective summary. It's longer and more detailed than this README on
+purpose:
+
+- **Steps 1-9** — scaffold the workspace, `west init`, narrow the module set down to the
+  four this board needs (the `project-filter` reasoning — why `group-filter` alone can't
+  do it), fetch modules shallow, export/trim the toolchain, verify the board target,
+  write the app (`main.c` + `prj.conf`, with the shell-vs-`console_getline()` decision and
+  numbers), build/flash, and a functional test over the serial console.
+- **Step 10** — how `reproduce-install.ps1` itself was produced: harvesting the exact
+  pinned values (Zephyr commit, SDK/pyOCD versions, module revisions) out of a verified
+  working install, plus a bug found and fixed along the way (`west init --mr <SHA>`
+  doesn't work — `git`'s `--branch` can't resolve a raw commit SHA).
+- **Step 11** — the VS Code integration: why each task/debug-config/IntelliSense setting
+  in `.vscode/` looks the way it does, including the Cortex-Debug and `FAULT ACK`
+  debugging issues referenced elsewhere in this README.
+- A **Troubleshooting table** keyed by symptom, and a **completion checklist**.
+
+**Read RUNBOOK.md when:** you're about to change module filters, SDK setup, or flashing
+config (CLAUDE.md says so explicitly); you hit a build/flash/debug failure this README's
+warnings don't already cover; or you want the *why* behind a decision, not just the
+current end state — e.g. the Windows file-lock quirks during `west init`, the `west
+packages pip --install` trap, the 7-Zip-on-PATH requirement for SDK setup, and the pyOCD
+0.44.1 regression mentioned above all have their full write-up there, not here.
