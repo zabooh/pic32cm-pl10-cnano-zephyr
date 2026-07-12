@@ -140,18 +140,6 @@ static void cmd_history_add(const char *line)
     }
 }
 
-static void cmd_history_print(void)
-{
-    if (cmd_history_count == 0) {
-        printk("history: empty\n");
-        return;
-    }
-
-    for (uint8_t i = 0; i < cmd_history_count; i++) {
-        printk("  %u  %s\n", i + 1, cmd_history[cmd_history_index(i)]);
-    }
-}
-
 static void cmd_help(void)
 {
     printk("Available commands:\n"
@@ -163,8 +151,8 @@ static void cmd_help(void)
            "  adc stream start  read the ADC every %u ms\n"
            "  adc stream stop   stop the ADC stream\n"
            "  reset           reboot the board\n"
-           "  history         show the last %u commands (also: Up/Down arrow)\n"
-           "  help            show this help\n", ADC_STREAM_PERIOD_MS, CMD_HISTORY_DEPTH);
+           "  help            show this help (Up/Down arrow recalls the last %u commands)\n",
+           ADC_STREAM_PERIOD_MS, CMD_HISTORY_DEPTH);
 }
 
 static void handle_line(char *line)
@@ -194,8 +182,6 @@ static void handle_line(char *line)
         cmd_adc_stream(arg);
     } else if (strcmp(line, "reset") == 0) {
         cmd_reset();
-    } else if (strcmp(line, "history") == 0) {
-        cmd_history_print();
     } else if (strcmp(line, "help") == 0) {
         cmd_help();
     } else if (*line != '\0') {
