@@ -1,6 +1,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/console/console.h>
 #include <zephyr/sys/reboot.h>
+#include <zephyr/version.h>
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -9,6 +10,18 @@
 #include "app_threads.h"
 #include "led_ctrl.h"
 #include "pl10_adc.h"
+
+/*
+ * We print the boot banner ourselves (CONFIG_BOOT_BANNER=n) so it can start
+ * with a leading newline - Zephyr's own banner has no leading '\n', so after
+ * a fault-triggered reboot it glued onto the tail of the (non-newline-
+ * terminated) fault dump. Version string derived exactly as Zephyr's
+ * boot_banner.c does. */
+#if defined(BUILD_VERSION) && !IS_EMPTY(BUILD_VERSION)
+#define ZEPHYR_VERSION_STR STRINGIFY(BUILD_VERSION)
+#else
+#define ZEPHYR_VERSION_STR KERNEL_VERSION_STRING
+#endif
 
 #define PROMPT "pl10:~$ "
 
@@ -340,7 +353,10 @@ static void cmd_thread_entry(void *p1, void *p2, void *p3)
 
     static char line[CMD_LINE_MAX_LEN];
 
-    printk("\nPIC32CM PL10 Blinky - built " __DATE__ " " __TIME__ "\n");
+    /* Leading '\n' (printk emits it as CR+LF) so the banner always starts on
+     * a fresh line, even right after a non-newline-terminated fault dump. */
+    printk("\n*** Booting Zephyr OS build " ZEPHYR_VERSION_STR " ***\n"
+           "PIC32CM PL10 Blinky - built " __DATE__ " " __TIME__ "\n");
     printk(PROMPT);
     while (1) {
         cmd_read_line(line, sizeof(line));

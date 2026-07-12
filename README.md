@@ -314,7 +314,7 @@ introspection, five threads):
 | | Used | Capacity | % used |
 |---|---|---|---|
 | RAM | 5,000 B | 8,192 B | **61.04%** |
-| Flash | 18,508 B | 61,440 B | **30.12%** |
+| Flash | 18,488 B | 61,440 B | **30.09%** |
 
 Check live numbers with `west build -d C:\zw\build -t ram_report` / `-t rom_report`
 (per-symbol breakdown) — or, on the running board, the **`threads`** console command,
