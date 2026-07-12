@@ -314,7 +314,7 @@ introspection, five threads):
 | | Used | Capacity | % used |
 |---|---|---|---|
 | RAM | 5,000 B | 8,192 B | **61.04%** |
-| Flash | 18,516 B | 61,440 B | **30.14%** |
+| Flash | 18,508 B | 61,440 B | **30.12%** |
 
 Check live numbers with `west build -d C:\zw\build -t ram_report` / `-t rom_report`
 (per-symbol breakdown) — or, on the running board, the **`threads`** console command,
@@ -327,7 +327,9 @@ set with headroom over the measured high-water marks — the `threads` command f
 first cut (256/320 B) as running at 100%/97%, so they were bumped. As a runtime safety
 net, `CONFIG_STACK_SENTINEL` is enabled (this MPU-less Cortex-M0+ can't use hardware stack
 protection): if a thread ever overflows anyway, the kernel raises a fatal error naming it
-instead of silently corrupting memory. The rest is kernel scaffolding, itself trimmed
+instead of silently corrupting memory. Fatal errors (a stack overflow, or a HardFault from
+a bad `mem` address) print their dump and then auto-reboot to the prompt
+(`CONFIG_RESET_ON_FATAL_ERROR`) rather than hanging. The rest is kernel scaffolding, itself trimmed
 (`ISR_STACK_SIZE` 2048→1024, `MAIN_STACK_SIZE` 1024→512).
 Staying this lean is deliberate: no Zephyr shell subsystem (a hand-rolled
 `console_getchar()` parser instead, which alone saved the shell's ~40-47% of RAM), only
