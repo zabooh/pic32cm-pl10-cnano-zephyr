@@ -3,6 +3,7 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/console/console.h>
+#include <zephyr/sys/reboot.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -133,6 +134,12 @@ static void cmd_adc_stream(void)
     printk("adc: stream stopped\n");
 }
 
+static void cmd_reset(void)
+{
+    printk("resetting...\n");
+    sys_reboot(SYS_REBOOT_COLD);
+}
+
 static void cmd_help(void)
 {
     printk("Available commands:\n"
@@ -142,6 +149,7 @@ static void cmd_help(void)
            "  led blink <ms>  blink LED every <ms> ms (0 stops blinking)\n"
            "  adc read        read the ADC (AIN29) once\n"
            "  adc stream      read the ADC every %u ms until Ctrl+C\n"
+           "  reset           reboot the board\n"
            "  help            show this help\n", ADC_STREAM_PERIOD_MS);
 }
 
@@ -163,6 +171,8 @@ static void handle_line(char *line)
         cmd_adc_read();
     } else if (strcmp(line, "adc stream") == 0) {
         cmd_adc_stream();
+    } else if (strcmp(line, "reset") == 0) {
+        cmd_reset();
     } else if (strcmp(line, "help") == 0) {
         cmd_help();
     } else if (*line != '\0') {
@@ -180,7 +190,8 @@ int main(void)
 
     console_getline_init();
 
-    printk("\n" PROMPT);
+    printk("\nPIC32CM PL10 Blinky - built " __DATE__ " " __TIME__ "\n");
+    printk(PROMPT);
     while (1) {
         char *line = console_getline();
         handle_line(line);
