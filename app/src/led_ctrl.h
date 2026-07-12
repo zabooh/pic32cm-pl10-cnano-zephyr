@@ -4,7 +4,11 @@
 #include <stdint.h>
 
 /* LED0 hardware ownership (GPIO + the dedicated blink thread) lives in
- * main.c; this is the only interface the command parser needs against it. */
+ * led_ctrl.c; this is the only interface the rest of the app uses. */
+
+/* Configure the LED GPIO. Returns 0 on success, negative errno on failure
+ * (LED device not ready). Call once at startup before any other function. */
+int led_ctrl_init(void);
 
 void led_ctrl_on(void);
 void led_ctrl_off(void);
