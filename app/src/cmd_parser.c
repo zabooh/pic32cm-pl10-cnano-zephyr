@@ -76,6 +76,56 @@ static void cmd_threads(void)
     k_thread_foreach(thread_info_cb, NULL);
 }
 
+/* Raw memory hex-dump. Deliberately does NO address validation - reading an
+ * unmapped, peripheral, or misaligned address will bus-fault (HardFault) on
+ * this MPU-less Cortex-M0+, which is intentional here: it lets you provoke and
+ * study faults (pairs with CONFIG_STACK_SENTINEL / the fatal-error handler).
+ * For a normal dump use a valid RAM (0x20000000) or flash (0x0c000000)
+ * address. `volatile` so the read actually happens even if the value is
+ * unused (a faulting access must not be optimized away). */
+static void cmd_mem(const char *arg)
+{
+    if (arg == NULL || *arg == '\0') {
+        printk("usage: mem <hex-addr> [count]\n");
+        return;
+    }
+
+    char *endp;
+    uint32_t addr = (uint32_t)strtoul(arg, &endp, 16);
+
+    uint32_t count = 64;
+    while (*endp == ' ') {
+        endp++;
+    }
+    if (*endp != '\0') {
+        count = (uint32_t)strtoul(endp, NULL, 0);
+    }
+    if (count == 0) {
+        count = 64;
+    }
+
+    const volatile uint8_t *p = (const volatile uint8_t *)addr;
+
+    for (uint32_t i = 0; i < count; i += 16) {
+        printk("%08x: ", addr + i);
+
+        for (uint32_t j = 0; j < 16; j++) {
+            if (i + j < count) {
+                printk("%02x ", p[i + j]);
+            } else {
+                printk("   ");
+            }
+        }
+
+        printk(" |");
+        for (uint32_t j = 0; j < 16 && i + j < count; j++) {
+            uint8_t c = p[i + j];
+            printk("%c", (c >= 0x20 && c < 0x7f) ? c : '.');
+        }
+        printk("|\n");
+    }
+}
+
 /* Ring buffer of the last CMD_HISTORY_DEPTH submitted lines, oldest first. */
 static char cmd_history[CMD_HISTORY_DEPTH][CMD_LINE_MAX_LEN];
 static uint8_t cmd_history_count;
@@ -116,6 +166,7 @@ static void cmd_help(void)
            "  adc stream stop   stop the ADC stream\n"
            "  reset           reboot the board\n"
            "  threads         list threads with live stack usage\n"
+           "  mem <addr> [n]  hex-dump n bytes at hex <addr> (no bounds check - can fault)\n"
            "  help            show this help (Up/Down arrow recalls the last %u commands)\n",
            PL10_ADC_STREAM_PERIOD_MS, CMD_HISTORY_DEPTH);
 }
@@ -149,6 +200,12 @@ static void handle_line(char *line)
         cmd_reset();
     } else if (strcmp(line, "threads") == 0) {
         cmd_threads();
+    } else if (strncmp(line, "mem", 3) == 0 && (line[3] == '\0' || line[3] == ' ')) {
+        char *arg = line + 3;
+        while (*arg == ' ') {
+            arg++;
+        }
+        cmd_mem(arg);
     } else if (strcmp(line, "help") == 0) {
         cmd_help();
     } else if (*line != '\0') {

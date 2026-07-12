@@ -28,9 +28,9 @@ serial command line — built to answer one question: **can Zephyr RTOS run comf
 an 8 KB-RAM microcontroller**, or does it need a beefier part to be worth using?
 
 - Interactive serial commands: `led on/off/toggle/blink <ms>`, `adc read`,
-  `adc stream start/stop`, `reset`, `threads` (live per-thread stack usage), `help` —
-  with a hand-rolled line editor featuring bash-style Up/Down command history, and a boot
-  banner stamped with the build time
+  `adc stream start/stop`, `reset`, `threads` (live per-thread stack usage),
+  `mem <addr>` (raw hex dump), `help` — with a hand-rolled line editor featuring
+  bash-style Up/Down command history, and a boot banner stamped with the build time
 - Genuinely multi-threaded: five threads (LED blink, ADC stream, command console, plus
   the kernel's main/idle) — a real RTOS app, not a superloop; a `threads` command shows
   each one's live stack high-water mark
@@ -314,7 +314,7 @@ introspection, five threads):
 | | Used | Capacity | % used |
 |---|---|---|---|
 | RAM | 5,000 B | 8,192 B | **61.04%** |
-| Flash | 18,144 B | 61,440 B | **29.53%** |
+| Flash | 18,516 B | 61,440 B | **30.14%** |
 
 Check live numbers with `west build -d C:\zw\build -t ram_report` / `-t rom_report`
 (per-symbol breakdown) — or, on the running board, the **`threads`** console command,
