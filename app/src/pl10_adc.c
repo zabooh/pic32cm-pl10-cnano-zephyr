@@ -1,8 +1,19 @@
 #include "pl10_adc.h"
 
+#include <zephyr/kernel.h>
+
 #include <pic32cm6408pl10048.h>
 
 /* ADC0_REGS is provided by pic32cm6408pl10048.h itself. */
+
+/* The only AIN channel this board actually breaks out (PA29/pin 39) - see
+ * pl10_adc_pinctrl_enable() below for how that was confirmed. */
+#define PL10_ADC_AIN29 29U
+
+#define ADC_VREF_MV 3300U
+
+#define ADC_STREAM_THREAD_STACK_SIZE 320
+#define ADC_STREAM_THREAD_PRIORITY 7
 
 /*
  * Zephyr's clock_control driver for this SoC (mchp_clock_pic32cm_pl.h) has no
@@ -52,7 +63,9 @@ static void pl10_adc_pinctrl_enable(void)
     PORT_REGS->GROUP[0].PORT_PMUX[14] = (PORT_REGS->GROUP[0].PORT_PMUX[14] & 0x0FU) | 0x10U;
 }
 
-void pl10_adc_init(void)
+/* --- low-level register driver --------------------------------------- */
+
+static void pl10_adc_init(void)
 {
     pl10_adc_clock_enable();
     pl10_adc_pinctrl_enable();
@@ -69,7 +82,8 @@ void pl10_adc_init(void)
     ADC0_REGS->ADC_CTRLA |= ADC_CTRLA_ENABLE_Msk;
 }
 
-uint16_t pl10_adc_read(uint8_t ain_channel)
+/* Blocking single-ended read on one AIN channel (ADC_INPUTCTRL_MUXPOS_AINx). */
+static uint16_t pl10_adc_read(uint8_t ain_channel)
 {
     ADC0_REGS->ADC_INPUTCTRL = ADC_INPUTCTRL_MUXPOS(ain_channel) | ADC_INPUTCTRL_MUXNEG_GND;
 
@@ -80,4 +94,63 @@ uint16_t pl10_adc_read(uint8_t ain_channel)
     }
 
     return (uint16_t)(ADC0_REGS->ADC_RESULT & 0xFFFF);
+}
+
+/* --- application-level ADC service ------------------------------------ */
+
+static bool adc_ready;
+
+static void ensure_adc_ready(void)
+{
+    if (!adc_ready) {
+        pl10_adc_init();
+        adc_ready = true;
+    }
+}
+
+static void print_adc_sample(uint16_t counts)
+{
+    uint32_t mv = ((uint32_t)counts * ADC_VREF_MV) / 4095U;
+    printk("adc: %u (%u.%03u V)\n", counts, mv / 1000U, mv % 1000U);
+}
+
+void pl10_adc_read_once(void)
+{
+    ensure_adc_ready();
+    print_adc_sample(pl10_adc_read(PL10_ADC_AIN29));
+}
+
+/* Enabled/disabled by pl10_adc_stream_set(). */
+static volatile bool adc_streaming;
+
+static void adc_stream_thread_entry(void *p1, void *p2, void *p3)
+{
+    while (1) {
+        if (!adc_streaming) {
+            k_sleep(K_FOREVER);
+            continue;
+        }
+
+        ensure_adc_ready();
+        print_adc_sample(pl10_adc_read(PL10_ADC_AIN29));
+
+        /* If pl10_adc_stream_set() wakes us early (stopped mid-period), loop
+         * back around immediately and re-check adc_streaming instead of
+         * sampling again on a shortened period. */
+        k_sleep(K_MSEC(PL10_ADC_STREAM_PERIOD_MS));
+    }
+}
+K_THREAD_DEFINE(adc_stream_tid, ADC_STREAM_THREAD_STACK_SIZE, adc_stream_thread_entry, NULL, NULL,
+        NULL, ADC_STREAM_THREAD_PRIORITY, 0, 0);
+
+void pl10_adc_stream_set(bool enable)
+{
+    adc_streaming = enable;
+    k_wakeup(adc_stream_tid);
+
+    if (enable) {
+        printk("adc: streaming every %u ms\n", PL10_ADC_STREAM_PERIOD_MS);
+    } else {
+        printk("adc: streaming stopped\n");
+    }
 }

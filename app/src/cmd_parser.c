@@ -11,12 +11,6 @@
 
 #define PROMPT "pl10:~$ "
 
-#define ADC_VREF_MV 3300U
-#define ADC_STREAM_PERIOD_MS 500U
-
-#define ADC_STREAM_THREAD_STACK_SIZE 320
-#define ADC_STREAM_THREAD_PRIORITY 7
-
 #define CMD_THREAD_STACK_SIZE 640
 #define CMD_THREAD_PRIORITY 7
 
@@ -41,66 +35,12 @@ static void cmd_led_blink(const char *arg)
     printk("led blink %u ms\n", ms);
 }
 
-static bool adc_ready;
-
-static void ensure_adc_ready(void)
-{
-    if (!adc_ready) {
-        pl10_adc_init();
-        adc_ready = true;
-    }
-}
-
-static void print_adc_sample(uint16_t counts)
-{
-    uint32_t mv = ((uint32_t)counts * ADC_VREF_MV) / 4095U;
-    printk("adc: %u (%u.%03u V)\n", counts, mv / 1000U, mv % 1000U);
-}
-
-static void cmd_adc_read(void)
-{
-    ensure_adc_ready();
-    print_adc_sample(pl10_adc_read(PL10_ADC_AIN29));
-}
-
-/* Enabled by "adc stream start", disabled by "adc stream stop" - see
- * adc_stream_set(). */
-static volatile bool adc_streaming;
-
-static void adc_stream_thread_entry(void *p1, void *p2, void *p3)
-{
-    while (1) {
-        if (!adc_streaming) {
-            k_sleep(K_FOREVER);
-            continue;
-        }
-
-        ensure_adc_ready();
-        print_adc_sample(pl10_adc_read(PL10_ADC_AIN29));
-
-        /* If adc_stream_set() wakes us early (stopped mid-period), loop
-         * back around immediately and re-check adc_streaming instead of
-         * sampling again on a shortened period. */
-        k_sleep(K_MSEC(ADC_STREAM_PERIOD_MS));
-    }
-}
-K_THREAD_DEFINE(adc_stream_tid, ADC_STREAM_THREAD_STACK_SIZE, adc_stream_thread_entry, NULL, NULL,
-        NULL, ADC_STREAM_THREAD_PRIORITY, 0, 0);
-
-static void adc_stream_set(bool enable)
-{
-    adc_streaming = enable;
-    k_wakeup(adc_stream_tid);
-}
-
 static void cmd_adc_stream(const char *arg)
 {
     if (arg != NULL && strcmp(arg, "start") == 0) {
-        adc_stream_set(true);
-        printk("adc: streaming every %u ms (adc stream stop to stop)\n", ADC_STREAM_PERIOD_MS);
+        pl10_adc_stream_set(true);
     } else if (arg != NULL && strcmp(arg, "stop") == 0) {
-        adc_stream_set(false);
-        printk("adc: stream stopped\n");
+        pl10_adc_stream_set(false);
     } else {
         printk("usage: adc stream <start|stop>\n");
     }
@@ -152,7 +92,7 @@ static void cmd_help(void)
            "  adc stream stop   stop the ADC stream\n"
            "  reset           reboot the board\n"
            "  help            show this help (Up/Down arrow recalls the last %u commands)\n",
-           ADC_STREAM_PERIOD_MS, CMD_HISTORY_DEPTH);
+           PL10_ADC_STREAM_PERIOD_MS, CMD_HISTORY_DEPTH);
 }
 
 static void handle_line(char *line)
@@ -173,7 +113,7 @@ static void handle_line(char *line)
         }
         cmd_led_blink(arg);
     } else if (strcmp(line, "adc read") == 0) {
-        cmd_adc_read();
+        pl10_adc_read_once();
     } else if (strncmp(line, "adc stream", 10) == 0) {
         char *arg = line + 10;
         while (*arg == ' ') {
