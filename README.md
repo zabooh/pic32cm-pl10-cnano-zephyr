@@ -7,13 +7,26 @@ serial command interface for interactively controlling the LED (`led on/off/togg
 full RTOS clone, HAL modules, Python venv, toolchain, build, and flash — on any Windows
 machine.
 
-> The app originally used the full Zephyr shell subsystem; it was replaced with a
-> lightweight `console_getline()`-based parser once RAM profiling showed the shell alone
-> using ~40-47% of this part's 8 KB of RAM. See "Design principle" below and `RUNBOOK.md`
-> → Step 7 for the full rationale and numbers.
-
 Built by following [`RUNBOOK.md`](RUNBOOK.md), which also documents every pitfall hit
 along the way — read it if you need to redo or extend this setup.
+
+## Contents
+
+- [Clone and reproduce this setup](#clone-and-reproduce-this-setup)
+- [Build & flash — `cmd.exe`, from `C:\zw`](#build--flash--cmdexe-from-czw)
+- [What's here](#whats-here)
+- [Hardware](#hardware)
+- [Quick start (this machine, already set up)](#quick-start-this-machine-already-set-up)
+- [Working in VS Code](#working-in-vs-code)
+  - [Recommended workflow: source-line debugging after build & flash](#recommended-workflow-source-line-debugging-after-build--flash)
+- [Reproducing this setup elsewhere](#reproducing-this-setup-elsewhere)
+- [What happens if the Zephyr SDK isn't installed](#what-happens-if-the-zephyr-sdk-isnt-installed)
+- [Important: pyOCD version is pinned for a reason](#important-pyocd-version-is-pinned-for-a-reason)
+- [Design principle: lean by construction](#design-principle-lean-by-construction)
+- [What `west update` actually does (and doesn't)](#what-west-update-actually-does-and-doesnt)
+- [Memory usage](#memory-usage)
+  - [Cost per extra thread (concurrency check)](#cost-per-extra-thread-concurrency-check)
+- [What is `RUNBOOK.md`?](#what-is-runbookmd)
 
 ## Clone and reproduce this setup
 
@@ -294,6 +307,29 @@ same firmware as this machine.
 **Prerequisites on the target machine:** Python (3.12+), Git, Ninja, CMake, and 7-Zip —
 all on `PATH`. See `RUNBOOK.md` → "Checking prerequisites" for details and why each one
 matters.
+
+## What happens if the Zephyr SDK isn't installed
+
+No silent degradation anywhere — every path that needs the SDK fails hard, with a clear
+error, before producing anything half-finished:
+
+- **`reproduce-install.ps1`** installs the SDK itself
+  (`west sdk install -t arm-zephyr-eabi -H --version 1.0.1`), wrapped in the script's
+  `Invoke-Checked` helper. If that step fails (e.g. 7-Zip missing from `PATH` — checked
+  even earlier, with its own `"7-Zip (7z.exe) is missing from PATH..."` error), the whole
+  script aborts right there; the build/flash steps after it never run.
+- **`west build`, if the SDK isn't present at all** (e.g. removed after the fact, or run
+  outside the reproduction script): this project never sets `ZEPHYR_TOOLCHAIN_VARIANT`,
+  so Zephyr's own `FindZephyr-sdk.cmake` falls back to auto-detection, searching a handful
+  of well-known paths (including `%USERPROFILE%` on Windows) for an installed SDK. Finding
+  none, `find_package(Zephyr-sdk REQUIRED)` fails and **CMake's configure step aborts
+  immediately** with a "could not find Zephyr SDK" fatal error — nothing gets compiled, no
+  `zephyr.hex` is produced.
+- **Debugging in VS Code**: `launch.json`/`c_cpp_properties.json` hardcode
+  `armToolchainPath` to `${env:USERPROFILE}/zephyr-sdk-<version>/...` (see the SDK-path
+  warning above). If the SDK isn't installed there, Cortex-Debug can't find
+  `arm-zephyr-eabi-gdb.exe` and the debug launch fails; IntelliSense loses the compiler's
+  builtin include paths the same way.
 
 ## Important: pyOCD version is pinned for a reason
 
