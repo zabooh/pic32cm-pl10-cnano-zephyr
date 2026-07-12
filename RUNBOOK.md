@@ -816,6 +816,142 @@ Useful commands from there: `next`/`n` (step over), `step`/`s` (step into), `con
 
 ---
 
+## Appendix A — Detailed memory analysis
+
+The README's "Memory usage" section only shows the current, final numbers. This appendix
+has the full history and breakdown behind them.
+
+**Across the four build versions this project went through:**
+
+| Version | RAM | Flash |
+|---|---|---|
+| Original Zephyr shell (`CONFIG_SHELL`, defaults) | 96.48% (7,904 B) | 69.69% (42,816 B) |
+| Shell, trimmed (`SHELL_STACK_SIZE=1536`, history/getopt off) | 83.50% (6,840 B) | 66.56% (40,892 B) |
+| `console_getline()`, hand-written prompt + `help` | 52.25% (4,280 B) | 27.13% (16,668 B) |
+| **Current** (+ `ISR_STACK_SIZE=1024`, `MAIN_STACK_SIZE=512`) | **33.50% (2,744 B)** | **27.13% (16,668 B)** |
+
+**Where the current build's usage goes** (top-level `ram_report`/`rom_report` categories):
+
+| Module | RAM | Module | Flash |
+|---|---|---|---|
+| kernel | 2,230 B (81.2%) | drivers | 5,240 B (31.5%) |
+| subsys (console) | 308 B (11.2%) | kernel | 4,712 B (28.3%) |
+| app (`main.c`) | 60 B (2.2%) | libc runtime¹ | 2,551 B (15.3%) |
+| drivers | 97 B (3.5%) | unattributed² | 1,177 B (7.1%) |
+| lib | 40 B (1.5%) | lib | 1,092 B (6.6%) |
+| arch | 4 B (0.1%) | arch | 1,014 B (6.1%) |
+| | | app (`main.c`) | 420 B (2.5%) |
+| | | subsys (console) | 128 B (0.8%) |
+
+¹ Compiler-generated runtime helpers with no source-file attribution (division, `memcpy`, printf helpers).
+² `rom_report`'s own `(hidden)` bucket — mostly inlined/optimized code without a clear symbol source.
+
+RAM is still dominated by kernel scaffolding (81%), but that scaffolding itself was cut:
+`CONFIG_ISR_STACK_SIZE` (2048→1024 B) and `CONFIG_MAIN_STACK_SIZE` (1024→512 B) — both
+fixed baseline costs independent of the app. **This is riskier than trimming the shell's
+per-thread stack**: `ISR_STACK_SIZE` is shared by *every* interrupt in the system (GPIO,
+UART RX, SysTick/timer) plus kernel init, so its worst-case need is harder to bound, and
+an overflow is more likely to silently corrupt memory than fault cleanly. Verified with a
+deliberately adversarial `pyserial` script — `led blink 10` (10 ms timer-ISR period, the
+fastest realistic interrupt load here) running while firing 15 rapid `help` calls (the
+deepest `printk`/format-string stack use in the app) over UART — no fault, no corrupted
+output. This is an empirical stress test of *this app's* actual interrupt surface, **not a
+formal worst-case proof**; re-verify with a similar test if you add new interrupt sources
+later. Flash's biggest category is the SERCOM/clock/GPIO drivers now that the shell is
+gone. The app itself (`main.c`) is tiny either way: 60 B RAM, 420 B flash for the entire
+blink-timer + command-parser + prompt + help logic.
+
+**For context, a comparable CMSIS/RTX5 application** on the same chip
+(`C:\work\Bukarest\3_Mi_CMSIS\CNANO_MCHP_Driver_Example` — GPIO LED via a `k_timer`-style
+thread, ADC polling, button-interrupt-to-USART, three CMSIS-RTOS2 threads + a mutex; no
+interactive command parser), read directly from its linker map
+(`CNANO_MCHP_Driver_Example.axf.map`, `LR_ROM`/`RW_RAM`+heap+stack region sizes):
+
+| | Zephyr (this project) | CMSIS/RTX5 (Bukarest project) |
+|---|---|---|
+| RAM | 4,280 B (**52.25%** of 8 KB) | 4,736 B (**57.81%** of 8 KB) |
+| Flash | 16,668 B (**27.13%** of 60 KB\*) | 20,568 B (**31.39%** of 64 KB\*) |
+| Threads | 1 (`main`) + a `k_timer` callback | 3 (LED/ADC/button) + a mutex |
+| Interactive commands | yes (`led on/off/toggle/blink`, `help`) | no |
+
+\* Small capacity-assumption difference between the two projects' linker scripts (64 KB
+vs. Zephyr's 60 KB `board.cmake` value) — both target the same physical chip
+(PIC32CM6408PL10048). Zephyr's RAM here is the `console_getline()` build *before* the
+kernel-stack trim above (4,280 B) — the current shipped build is smaller still (2,744 B,
+33.50%), widening this gap further.
+
+Despite doing *more* (3 RTOS threads, ADC, USART) and offering *less* (no interactive
+commands), the CMSIS/RTX5 build isn't meaningfully leaner than this Zephyr build — RAM is
+actually slightly higher. This suggests the RAM cost this project chased down was
+specifically the **Zephyr shell subsystem's overhead**, not something inherent to Zephyr
+itself: with the shell replaced by `console_getline()`, Zephyr lands in the same ballpark
+as a hand-tuned CMSIS/RTX5 equivalent on this chip — and pulls ahead once the kernel
+stacks are trimmed too.
+
+**Cost per extra thread (concurrency check):** the comparison above isn't quite fair to
+Zephyr's threading model: this app only runs **one** thread (`main`) — `blink_timer`'s
+callback fires in interrupt context, not a second thread — while the CMSIS/RTX5 app
+actually runs three. To measure Zephyr's per-thread cost directly, three throwaway
+`K_THREAD_DEFINE(..., 256, ...)` threads were added temporarily, built, measured with
+`ram_report`, then removed again (not part of the shipped app; measured before the
+kernel-stack trim above, so the baseline row is 4,280 B — the delta itself is unaffected
+by that trim and still applies):
+
+| | RAM | Δ per thread |
+|---|---|---|
+| Baseline (1 thread) | 4,280 B (52.25%) | — |
+| +3 dummy threads (256 B stack each) | 5,384 B (65.72%) | **368 B** (256 B stack + 112 B thread control block, exactly as declared — no hidden overhead) |
+
+That's a modest, predictable per-thread cost, likely comparable to RTX5's (typically a
+few hundred bytes depending on stack size). The real difference between the two RTOSes on
+this chip isn't per-thread cost — it's Zephyr's **fixed baseline** (interrupt stack + main
+stack, present regardless of thread count). With the current, smaller 2,744 B baseline
+there's room for roughly 14-15 more 256 B threads (vs. ~8-10 estimated against the
+pre-trim baseline) before RAM becomes the constraint — fine for a handful of concurrent
+tasks, but the fixed Zephyr baseline (not per-thread cost) is what limits how far this
+scales on an 8 KB part.
+
+## Appendix B — Moving the version pin forward (`west update` internals)
+
+This workspace pins everything on purpose (see Step 3 and the Constraints section). This
+appendix explains exactly what `west update` does and doesn't cover, for when you
+deliberately want to move a pin forward later instead of just reproducing the current
+state.
+
+`west update` only syncs the **module projects** listed in the manifest — `hal_microchip`,
+`cmsis`, `cmsis_6`, `picolibc` (after `manifest.group-filter` and `manifest.project-filter`
+are applied) — to whatever revisions are pinned in the `west.yml` that's currently checked
+out inside `zephyr/`. Concretely, for each project that survives the filters, it clones/
+fetches and checks out the exact commit/tag the manifest specifies; anything filtered out
+is never touched. Run it twice with no manifest changes and it's a no-op.
+
+It does **not** touch `zephyr/` itself. That repo is pinned to one exact commit
+(`git checkout <SHA>`, see `reproduce-install.ps1`'s `$ZEPHYR_REV`) — not managed by the
+west-update mechanism at all. So if Zephyr mainline gains a new PL10 peripheral driver
+after that commit, `west update` will never fetch it, no matter how often you run it — the
+driver source (`drivers/...`, DTS bindings) lives in `zephyr/` proper, not in a module.
+
+To actually pull in newer mainline code:
+
+1. Move the pin forward yourself: `Set-Location C:\zw\zephyr; git fetch upstream; git
+   checkout <newer-commit-or-tag>` (detached HEAD, same as initial setup — not `git pull`
+   on a branch).
+2. *Then* run `west update` — it now reads the `west.yml` from the new commit, and pulls
+   any module revision bumps that commit requires (e.g. a `hal_microchip` bump backing the
+   new driver).
+3. Check whether the new driver needs a module your `project-filter` currently excludes —
+   if so, widen it for that one project (see Step 3) before rebuilding.
+4. Pristine rebuild (`-p always`) and re-check `ram_report`/`rom_report` — see Appendix A;
+   there's very little headroom.
+5. If the new driver adds interrupt sources, re-run the stress test described in the
+   `ISR_STACK_SIZE` discussion in Step 7 before trusting the stack-size tuning still holds.
+
+This is a deliberate, riskier step, not a routine `west update` — it can drag along other
+module revision changes and SDK-compatibility shifts, so treat it as its own change to
+test end-to-end (build + flash + interaction), not a drive-by fetch.
+
+---
+
 ## Troubleshooting (consult on errors)
 
 First map the error to a pipeline stage: **west → CMake → Kconfig/Devicetree → Compiler → Linker.** Then target it:
