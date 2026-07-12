@@ -314,7 +314,7 @@ introspection, five threads):
 | | Used | Capacity | % used |
 |---|---|---|---|
 | RAM | 5,000 B | 8,192 B | **61.04%** |
-| Flash | 18,064 B | 61,440 B | **29.40%** |
+| Flash | 18,144 B | 61,440 B | **29.53%** |
 
 Check live numbers with `west build -d C:\zw\build -t ram_report` / `-t rom_report`
 (per-symbol breakdown) — or, on the running board, the **`threads`** console command,
@@ -324,8 +324,11 @@ Most of the RAM is the three application threads — each `k_thread` costs its s
 blink, 512 B ADC stream, 640 B console) plus a 120 B thread control block, all directly
 visible in `ram_report`. Those stack sizes live in one place (`app_threads.h`) and were
 set with headroom over the measured high-water marks — the `threads` command flagged the
-first cut (256/320 B) as running at 100%/97%, so they were bumped. The rest is kernel
-scaffolding, itself trimmed (`ISR_STACK_SIZE` 2048→1024, `MAIN_STACK_SIZE` 1024→512).
+first cut (256/320 B) as running at 100%/97%, so they were bumped. As a runtime safety
+net, `CONFIG_STACK_SENTINEL` is enabled (this MPU-less Cortex-M0+ can't use hardware stack
+protection): if a thread ever overflows anyway, the kernel raises a fatal error naming it
+instead of silently corrupting memory. The rest is kernel scaffolding, itself trimmed
+(`ISR_STACK_SIZE` 2048→1024, `MAIN_STACK_SIZE` 1024→512).
 Staying this lean is deliberate: no Zephyr shell subsystem (a hand-rolled
 `console_getchar()` parser instead, which alone saved the shell's ~40-47% of RAM), only
 the four HAL/lib modules this board needs, `CONFIG_LOG=n`.
