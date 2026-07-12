@@ -6,13 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "app_threads.h"
 #include "led_ctrl.h"
 #include "pl10_adc.h"
 
 #define PROMPT "pl10:~$ "
-
-#define CMD_THREAD_STACK_SIZE 640
-#define CMD_THREAD_PRIORITY 7
 
 #define CMD_LINE_MAX_LEN 32
 #define CMD_HISTORY_DEPTH 5
@@ -50,6 +48,32 @@ static void cmd_reset(void)
 {
     printk("resetting...\n");
     sys_reboot(SYS_REBOOT_COLD);
+}
+
+/* k_thread_foreach() callback: print one thread's name, priority, and live
+ * stack usage. Needs CONFIG_THREAD_MONITOR (thread list), THREAD_NAME
+ * (names), THREAD_STACK_INFO + INIT_STACKS (accurate used-stack count) -
+ * see prj.conf. */
+static void thread_info_cb(const struct k_thread *thread, void *user_data)
+{
+    ARG_UNUSED(user_data);
+
+    size_t unused = 0;
+    (void)k_thread_stack_space_get(thread, &unused);
+
+    size_t total = thread->stack_info.size;
+    const char *name = k_thread_name_get((k_tid_t)thread);
+
+    printk("  %-14s prio %2d  stack %u/%u B\n",
+           (name != NULL && name[0] != '\0') ? name : "?",
+           k_thread_priority_get((k_tid_t)thread),
+           (unsigned int)(total - unused), (unsigned int)total);
+}
+
+static void cmd_threads(void)
+{
+    printk("Threads (used/total stack):\n");
+    k_thread_foreach(thread_info_cb, NULL);
 }
 
 /* Ring buffer of the last CMD_HISTORY_DEPTH submitted lines, oldest first. */
@@ -91,6 +115,7 @@ static void cmd_help(void)
            "  adc stream start  read the ADC every %u ms\n"
            "  adc stream stop   stop the ADC stream\n"
            "  reset           reboot the board\n"
+           "  threads         list threads with live stack usage\n"
            "  help            show this help (Up/Down arrow recalls the last %u commands)\n",
            PL10_ADC_STREAM_PERIOD_MS, CMD_HISTORY_DEPTH);
 }
@@ -122,6 +147,8 @@ static void handle_line(char *line)
         cmd_adc_stream(arg);
     } else if (strcmp(line, "reset") == 0) {
         cmd_reset();
+    } else if (strcmp(line, "threads") == 0) {
+        cmd_threads();
     } else if (strcmp(line, "help") == 0) {
         cmd_help();
     } else if (*line != '\0') {

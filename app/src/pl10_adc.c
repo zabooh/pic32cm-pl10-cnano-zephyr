@@ -4,6 +4,8 @@
 
 #include <pic32cm6408pl10048.h>
 
+#include "app_threads.h"
+
 /* ADC0_REGS is provided by pic32cm6408pl10048.h itself. */
 
 /* The only AIN channel this board actually breaks out (PA29/pin 39) - see
@@ -11,9 +13,6 @@
 #define PL10_ADC_AIN29 29U
 
 #define ADC_VREF_MV 3300U
-
-#define ADC_STREAM_THREAD_STACK_SIZE 320
-#define ADC_STREAM_THREAD_PRIORITY 7
 
 /*
  * Zephyr's clock_control driver for this SoC (mchp_clock_pic32cm_pl.h) has no

@@ -2,13 +2,11 @@
 #include <zephyr/drivers/gpio.h>
 #include <errno.h>
 
+#include "app_threads.h"
 #include "led_ctrl.h"
 
 #define LED0_NODE DT_ALIAS(led0)
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
-
-#define BLINK_THREAD_STACK_SIZE 256
-#define BLINK_THREAD_PRIORITY 7
 
 /* Blink interval in ms; 0 = no automatic blinking */
 static volatile uint32_t blink_ms;

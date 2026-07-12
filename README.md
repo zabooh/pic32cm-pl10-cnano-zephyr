@@ -28,10 +28,12 @@ serial command line — built to answer one question: **can Zephyr RTOS run comf
 an 8 KB-RAM microcontroller**, or does it need a beefier part to be worth using?
 
 - Interactive serial commands: `led on/off/toggle/blink <ms>`, `adc read`,
-  `adc stream start/stop`, `reset`, `help` — with a hand-rolled line editor featuring
-  bash-style Up/Down command history, and a boot banner stamped with the build time
+  `adc stream start/stop`, `reset`, `threads` (live per-thread stack usage), `help` —
+  with a hand-rolled line editor featuring bash-style Up/Down command history, and a boot
+  banner stamped with the build time
 - Genuinely multi-threaded: five threads (LED blink, ADC stream, command console, plus
-  the kernel's main/idle) — a real RTOS app, not a superloop
+  the kernel's main/idle) — a real RTOS app, not a superloop; a `threads` command shows
+  each one's live stack high-water mark
 - Fully reproducible setup: one script rebuilds the whole toolchain (Zephyr, HAL
   modules, SDK, Python deps) from scratch on any Windows machine, pinned to exact
   versions
@@ -39,8 +41,8 @@ an 8 KB-RAM microcontroller**, or does it need a beefier part to be worth using?
   (not the dozens of unrelated HALs/subsystems a default `west update` would pull in),
   keeping the whole installation **under 2 GB** instead of several GB
 - VS Code integration: build/flash tasks, source-line debugging, IntelliSense
-- Only **52% RAM / 29% flash** used of this board's 8 KB RAM / 60 KB flash — half the RAM
-  still free with all of the above running
+- Only **61% RAM / 29% flash** used of this board's 8 KB RAM / 60 KB flash — still
+  ~39% of RAM free with all of the above running (thread introspection included)
 
 Where to go from here:
 - Just want to build and flash it? → [Quick start](#quick-start)
@@ -52,8 +54,9 @@ Where to go from here:
 - Zephyr RTOS runs comfortably on the PIC32CM PL10's 8 KB RAM — contrary to the common
   assumption that it needs a bigger part.
 - A real multi-threaded interactive app (LED blink + ADC streaming + a command console
-  with history, five threads total) still leaves **~48% of RAM free** — 4,264 B used of
-  8 KB. A bare blinky started even lower (2,744 B / 33.50%; see [Memory usage](#memory-usage)).
+  with history + thread introspection, five threads total) still leaves **~39% of RAM
+  free** — 5,000 B used of 8 KB. A bare blinky started far lower (2,744 B / 33.50%; see
+  [Memory usage](#memory-usage)).
 - The entire toolchain — Zephyr revision, HAL modules, SDK, Python packages — is
   version-pinned and reproducible with one script on a fresh Windows machine.
 - Source-line debugging works reliably in VS Code once a couple of Windows-specific
@@ -124,7 +127,7 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 
 | Path | Purpose |
 |---|---|
-| `app/` | The application: `CMakeLists.txt`, `prj.conf`, and `src/` split one module per domain — `main.c` (startup wiring), `led_ctrl.c` (LED + blink thread), `pl10_adc.c` (ADC driver + stream thread), `cmd_parser.c` (console, line editor, history) |
+| `app/` | The application: `CMakeLists.txt`, `prj.conf`, and `src/` split one module per domain — `main.c` (startup wiring), `led_ctrl.c` (LED + blink thread), `pl10_adc.c` (ADC driver + stream thread), `cmd_parser.c` (console, line editor, history), `app_threads.h` (central thread stack/priority budgets) |
 | `zephyr/` | Zephyr RTOS source (shallow clone, pinned revision) |
 | `modules/` | Only the HAL/library modules actually needed: `hal_microchip`, `cmsis`, `cmsis_6`, `picolibc` |
 | `build/` | CMake/Ninja build output; `build/zephyr/zephyr.hex` is the flashable artifact |
@@ -305,23 +308,27 @@ commit. Full explanation and the 5-step procedure for moving the pin forward: `R
 ## Memory usage
 
 This board has only 8 KB RAM / 60 KB flash, so usage is worth watching, not just "does it
-fit." Current build (LED blink + ADC + command console with history, five threads):
+fit." Current build (LED blink + ADC + command console with history + thread
+introspection, five threads):
 
 | | Used | Capacity | % used |
 |---|---|---|---|
-| RAM | 4,264 B | 8,192 B | **52.05%** |
-| Flash | 17,496 B | 61,440 B | **28.48%** |
+| RAM | 5,000 B | 8,192 B | **61.04%** |
+| Flash | 18,064 B | 61,440 B | **29.40%** |
 
 Check live numbers with `west build -d C:\zw\build -t ram_report` / `-t rom_report`
-(per-symbol breakdown).
+(per-symbol breakdown) — or, on the running board, the **`threads`** console command,
+which prints each thread's live stack high-water mark.
 
-Roughly half the RAM is the three application threads — each `k_thread` costs its stack
-(256 B blink, 320 B ADC stream, 640 B console) plus a 120 B thread control block, all
-directly visible in `ram_report`. The rest is kernel scaffolding, itself trimmed
-(`ISR_STACK_SIZE` 2048→1024, `MAIN_STACK_SIZE` 1024→512). Staying this lean is
-deliberate: no Zephyr shell subsystem (a hand-rolled `console_getchar()` parser instead,
-which alone saved the shell's ~40-47% of RAM), only the four HAL/lib modules this board
-needs, `CONFIG_LOG=n`.
+Most of the RAM is the three application threads — each `k_thread` costs its stack (512 B
+blink, 512 B ADC stream, 640 B console) plus a 120 B thread control block, all directly
+visible in `ram_report`. Those stack sizes live in one place (`app_threads.h`) and were
+set with headroom over the measured high-water marks — the `threads` command flagged the
+first cut (256/320 B) as running at 100%/97%, so they were bumped. The rest is kernel
+scaffolding, itself trimmed (`ISR_STACK_SIZE` 2048→1024, `MAIN_STACK_SIZE` 1024→512).
+Staying this lean is deliberate: no Zephyr shell subsystem (a hand-rolled
+`console_getchar()` parser instead, which alone saved the shell's ~40-47% of RAM), only
+the four HAL/lib modules this board needs, `CONFIG_LOG=n`.
 
 A bare blinky earlier in this project's history sat at just 2,744 B (33.50%). Full
 version-by-version numbers, the per-module `ram_report`/`rom_report` breakdown, a
