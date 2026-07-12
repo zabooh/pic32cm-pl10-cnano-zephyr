@@ -5,6 +5,11 @@ Minimal, from-scratch [Zephyr RTOS](https://www.zephyrproject.org/) workspace fo
 that reproduces the entire installation — RTOS clone, HAL modules, Python venv,
 toolchain, build, and flash — on another Windows machine.
 
+> `C:\zw` throughout this README (and `RUNBOOK.md`) is just an example path, not a
+> requirement — use whatever directory you like. Keep it **short**, though: Zephyr's
+> build tree nests deeply, and a long workspace path can hit Windows' ~260-character
+> path limit (see "Path too long" in `RUNBOOK.md` → Troubleshooting).
+
 ## Contents
 
 - [Executive summary](#executive-summary)
