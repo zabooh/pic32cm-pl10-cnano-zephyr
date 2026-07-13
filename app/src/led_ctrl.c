@@ -1,8 +1,11 @@
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
 #include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "app_threads.h"
+#include "cmd.h"
 #include "led_ctrl.h"
 
 #define LED0_NODE DT_ALIAS(led0)
@@ -64,3 +67,26 @@ int led_ctrl_init(void)
     gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);
     return 0;
 }
+
+/* --- console command ---------------------------------------------------- */
+
+static void led_cmd(int argc, char **argv)
+{
+    if (argc == 2 && strcmp(argv[1], "on") == 0) {
+        led_ctrl_on();
+        printk("led on\n");
+    } else if (argc == 2 && strcmp(argv[1], "off") == 0) {
+        led_ctrl_off();
+        printk("led off\n");
+    } else if (argc == 2 && strcmp(argv[1], "toggle") == 0) {
+        led_ctrl_toggle();
+        printk("led toggled\n");
+    } else if (argc == 3 && strcmp(argv[1], "blink") == 0) {
+        uint32_t ms = (uint32_t)strtoul(argv[2], NULL, 10);
+        led_ctrl_blink(ms);
+        printk("led blink %u ms\n", ms);
+    } else {
+        printk("usage: led on|off|toggle|blink <ms>\n");
+    }
+}
+CMD_REGISTER(led, "led", led_cmd, "led on|off|toggle|blink <ms>  - LED control");

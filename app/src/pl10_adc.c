@@ -1,10 +1,12 @@
 #include "pl10_adc.h"
 
 #include <zephyr/kernel.h>
+#include <string.h>
 
 #include <pic32cm6408pl10048.h>
 
 #include "app_threads.h"
+#include "cmd.h"
 
 /* ADC0_REGS is provided by pic32cm6408pl10048.h itself. */
 
@@ -153,3 +155,21 @@ void pl10_adc_stream_set(bool enable)
         printk("adc: streaming stopped\n");
     }
 }
+
+/* --- console command ---------------------------------------------------- */
+
+static void adc_cmd(int argc, char **argv)
+{
+    if (argc == 2 && strcmp(argv[1], "read") == 0) {
+        pl10_adc_read_once();
+    } else if (argc == 3 && strcmp(argv[1], "stream") == 0 &&
+               strcmp(argv[2], "start") == 0) {
+        pl10_adc_stream_set(true);
+    } else if (argc == 3 && strcmp(argv[1], "stream") == 0 &&
+               strcmp(argv[2], "stop") == 0) {
+        pl10_adc_stream_set(false);
+    } else {
+        printk("usage: adc read | adc stream <start|stop>\n");
+    }
+}
+CMD_REGISTER(adc, "adc", adc_cmd, "adc read | adc stream start|stop  - ADC (AIN29)");

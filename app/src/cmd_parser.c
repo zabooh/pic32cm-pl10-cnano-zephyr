@@ -1,15 +1,21 @@
 #include <zephyr/kernel.h>
 #include <zephyr/console/console.h>
-#include <zephyr/sys/reboot.h>
 #include <zephyr/version.h>
 #include <ctype.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "app_threads.h"
-#include "led_ctrl.h"
-#include "pl10_adc.h"
+#include "cmd.h"
+
+/*
+ * Generic console front-end: a hand-rolled line editor (with bash-style Up/Down
+ * history) over console_getchar(), plus a tokenizer that dispatches each line
+ * to the command registry (cmd.h). This module knows nothing about led/adc/etc.
+ * - every command lives in its owning module and self-registers via
+ * CMD_REGISTER(); adding a command never touches this file. Only "help" is
+ * built in here, since it is intrinsic to the registry.
+ */
 
 /*
  * We print the boot banner ourselves (CONFIG_BOOT_BANNER=n) so it can start
@@ -27,6 +33,7 @@
 
 #define CMD_LINE_MAX_LEN 32
 #define CMD_HISTORY_DEPTH 5
+#define CMD_MAX_ARGS 4 /* deepest: "adc stream start" / "mem <addr> <n>" = 3 */
 
 #define KEY_BS 0x08
 #define KEY_DEL 0x7f
@@ -35,109 +42,59 @@
 #define KEY_UP 'A'
 #define KEY_DOWN 'B'
 
-static void cmd_led_blink(const char *arg)
+/* Split `line` into argv[] in place (spaces overwritten with '\0'). Returns
+ * argc; extra tokens beyond `max` are left attached to the last argv entry. */
+static int tokenize(char *line, char **argv, int max)
 {
-    if (arg == NULL || *arg == '\0') {
-        printk("usage: led blink <ms>\n");
-        return;
-    }
-    uint32_t ms = (uint32_t)strtoul(arg, NULL, 10);
-    led_ctrl_blink(ms);
-    printk("led blink %u ms\n", ms);
-}
+    int argc = 0;
 
-static void cmd_adc_stream(const char *arg)
-{
-    if (arg != NULL && strcmp(arg, "start") == 0) {
-        pl10_adc_stream_set(true);
-    } else if (arg != NULL && strcmp(arg, "stop") == 0) {
-        pl10_adc_stream_set(false);
-    } else {
-        printk("usage: adc stream <start|stop>\n");
-    }
-}
-
-static void cmd_reset(void)
-{
-    printk("resetting...\n");
-    sys_reboot(SYS_REBOOT_COLD);
-}
-
-/* k_thread_foreach() callback: print one thread's name, priority, and live
- * stack usage. Needs CONFIG_THREAD_MONITOR (thread list), THREAD_NAME
- * (names), THREAD_STACK_INFO + INIT_STACKS (accurate used-stack count) -
- * see prj.conf. */
-static void thread_info_cb(const struct k_thread *thread, void *user_data)
-{
-    ARG_UNUSED(user_data);
-
-    size_t unused = 0;
-    (void)k_thread_stack_space_get(thread, &unused);
-
-    size_t total = thread->stack_info.size;
-    const char *name = k_thread_name_get((k_tid_t)thread);
-
-    printk("  %-14s prio %2d  stack %u/%u B\n",
-           (name != NULL && name[0] != '\0') ? name : "?",
-           k_thread_priority_get((k_tid_t)thread),
-           (unsigned int)(total - unused), (unsigned int)total);
-}
-
-static void cmd_threads(void)
-{
-    printk("Threads (used/total stack):\n");
-    k_thread_foreach(thread_info_cb, NULL);
-}
-
-/* Raw memory hex-dump. Deliberately does NO address validation - reading an
- * unmapped, peripheral, or misaligned address will bus-fault (HardFault) on
- * this MPU-less Cortex-M0+, which is intentional here: it lets you provoke and
- * study faults (pairs with CONFIG_STACK_SENTINEL / the fatal-error handler).
- * For a normal dump use a valid RAM (0x20000000) or flash (0x0c000000)
- * address. `volatile` so the read actually happens even if the value is
- * unused (a faulting access must not be optimized away). */
-static void cmd_mem(const char *arg)
-{
-    if (arg == NULL || *arg == '\0') {
-        printk("usage: mem <hex-addr> [count]\n");
-        return;
-    }
-
-    char *endp;
-    uint32_t addr = (uint32_t)strtoul(arg, &endp, 16);
-
-    uint32_t count = 64;
-    while (*endp == ' ') {
-        endp++;
-    }
-    if (*endp != '\0') {
-        count = (uint32_t)strtoul(endp, NULL, 0);
-    }
-    if (count == 0) {
-        count = 64;
-    }
-
-    const volatile uint8_t *p = (const volatile uint8_t *)addr;
-
-    for (uint32_t i = 0; i < count; i += 16) {
-        printk("%08x: ", addr + i);
-
-        for (uint32_t j = 0; j < 16; j++) {
-            if (i + j < count) {
-                printk("%02x ", p[i + j]);
-            } else {
-                printk("   ");
-            }
+    while (*line != '\0' && argc < max) {
+        while (*line == ' ') {
+            *line++ = '\0';
         }
-
-        printk(" |");
-        for (uint32_t j = 0; j < 16 && i + j < count; j++) {
-            uint8_t c = p[i + j];
-            printk("%c", (c >= 0x20 && c < 0x7f) ? c : '.');
+        if (*line == '\0') {
+            break;
         }
-        printk("|\n");
+        argv[argc++] = line;
+        while (*line != '\0' && *line != ' ') {
+            line++;
+        }
     }
+    return argc;
 }
+
+static void handle_line(char *line)
+{
+    char *argv[CMD_MAX_ARGS];
+    int argc = tokenize(line, argv, CMD_MAX_ARGS);
+
+    if (argc == 0) {
+        return; /* empty line */
+    }
+
+    STRUCT_SECTION_FOREACH(cmd, c) {
+        if (strcmp(argv[0], c->name) == 0) {
+            c->fn(argc, argv);
+            return;
+        }
+    }
+    printk("unknown command: %s\n", argv[0]);
+}
+
+/* "help" is built in here: it iterates the command registry and prints each
+ * entry's one-line help. Registration order is link order (not sorted). */
+static void help_cmd(int argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    printk("Available commands:\n");
+    STRUCT_SECTION_FOREACH(cmd, c) {
+        printk("  %s\n", c->help);
+    }
+    printk("  (Up/Down arrow recalls the last %u commands)\n", CMD_HISTORY_DEPTH);
+}
+CMD_REGISTER(help, "help", help_cmd, "help            - show this help");
 
 /* Ring buffer of the last CMD_HISTORY_DEPTH submitted lines, oldest first. */
 static char cmd_history[CMD_HISTORY_DEPTH][CMD_LINE_MAX_LEN];
@@ -164,65 +121,6 @@ static void cmd_history_add(const char *line)
     cmd_history_next = (cmd_history_next + 1) % CMD_HISTORY_DEPTH;
     if (cmd_history_count < CMD_HISTORY_DEPTH) {
         cmd_history_count++;
-    }
-}
-
-static void cmd_help(void)
-{
-    printk("Available commands:\n"
-           "  led on          turn LED on\n"
-           "  led off         turn LED off\n"
-           "  led toggle      toggle LED\n"
-           "  led blink <ms>  blink LED every <ms> ms (0 stops blinking)\n"
-           "  adc read        read the ADC (AIN29) once\n"
-           "  adc stream start  read the ADC every %u ms\n"
-           "  adc stream stop   stop the ADC stream\n"
-           "  reset           reboot the board\n"
-           "  threads         list threads with live stack usage\n"
-           "  mem <addr> [n]  hex-dump n bytes at hex <addr> (no bounds check - can fault)\n"
-           "  help            show this help (Up/Down arrow recalls the last %u commands)\n",
-           PL10_ADC_STREAM_PERIOD_MS, CMD_HISTORY_DEPTH);
-}
-
-static void handle_line(char *line)
-{
-    if (strcmp(line, "led on") == 0) {
-        led_ctrl_on();
-        printk("led on\n");
-    } else if (strcmp(line, "led off") == 0) {
-        led_ctrl_off();
-        printk("led off\n");
-    } else if (strcmp(line, "led toggle") == 0) {
-        led_ctrl_toggle();
-        printk("led toggled\n");
-    } else if (strncmp(line, "led blink", 9) == 0) {
-        char *arg = line + 9;
-        while (*arg == ' ') {
-            arg++;
-        }
-        cmd_led_blink(arg);
-    } else if (strcmp(line, "adc read") == 0) {
-        pl10_adc_read_once();
-    } else if (strncmp(line, "adc stream", 10) == 0) {
-        char *arg = line + 10;
-        while (*arg == ' ') {
-            arg++;
-        }
-        cmd_adc_stream(arg);
-    } else if (strcmp(line, "reset") == 0) {
-        cmd_reset();
-    } else if (strcmp(line, "threads") == 0) {
-        cmd_threads();
-    } else if (strncmp(line, "mem", 3) == 0 && (line[3] == '\0' || line[3] == ' ')) {
-        char *arg = line + 3;
-        while (*arg == ' ') {
-            arg++;
-        }
-        cmd_mem(arg);
-    } else if (strcmp(line, "help") == 0) {
-        cmd_help();
-    } else if (*line != '\0') {
-        printk("unknown command: %s\n", line);
     }
 }
 
