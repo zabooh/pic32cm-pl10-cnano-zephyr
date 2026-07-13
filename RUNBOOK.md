@@ -5,7 +5,7 @@
 
 ## Task (summary)
 
-Set up a **as lean as possible** Zephyr installation under `C:\zw` that contains only what's needed for the **PIC32CM PL10 Curiosity Nano** board. Build a **blinky program with a serial command interface** that lets you control the LED in different ways (originally the Zephyr shell subsystem; replaced with a minimal `console_getline()`-based parser once RAM profiling showed the shell alone using ~40-47% of this part's 8 KB RAM — see Step 7). Flash it. At the end, produce a **pinned reproduction script** that deterministically recreates this exact installation anywhere.
+Set up a **as lean as possible** Zephyr installation under `C:\zw` that contains only what's needed for the **PIC32CM PL10 Curiosity Nano** board. Build a **blinky program with a serial command interface** that lets you control the LED and read the ADC in different ways (originally the Zephyr shell subsystem; replaced with a hand-rolled `console_getchar()` parser plus a link-time command registry once RAM profiling showed the shell alone using ~40-47% of this part's 8 KB RAM — see Step 7). Flash it. At the end, produce a **pinned reproduction script** that deterministically recreates this exact installation anywhere.
 
 Guiding principle throughout: **leanness**. Only the ARM toolchain, only the modules PIC32CM actually needs, shallow clone.
 
@@ -175,16 +175,27 @@ Set the verified name as the placeholder `<BOARD>` for the rest of the runbook.
 
 ---
 
-## Step 7 — Create the blinky application with a minimal LED command parser
+## Step 7 — Create the application (modular, with a command registry)
 
-Create a **standalone, minimal application** under `C:\zw\app` (don't copy the Zephyr sample — leaner and self-contained).
+Create a **standalone, minimal application** under `C:\zw\app` (don't copy the Zephyr sample — leaner and self-contained). It is split **one module per functional domain**, and the console is **feature-agnostic**: each module *self-registers* its command into a flash-resident registry, so adding a command never touches the parser. This section is generic on purpose — the pattern (module-per-domain + link-time command registry) reproduces on any Zephyr board; only the board name, the peripheral driver, and the pinned config values are specific.
 
-**Directory layout:**
+> **How it got to this shape (historical).** It began as a single `main.c` using `CONFIG_SHELL`; on this 8 KB-RAM part `ram_report` put the shell subsystem alone at ~47% of RAM for four trivial commands. It was replaced by a hand-rolled parser over `console_getline()` (−~15 KB flash / −~3.7 KB RAM for the same UX), then switched to `console_getchar()` to gain bash-style Up/Down history (line mode drops arrow escapes), and finally the hard-coded `strcmp` dispatch was inverted into the command registry below so features stopped being welded to the parser. The no-shell and stack-trimming rationale in the notes below still explains the `prj.conf` choices.
+
+**Directory layout** (one module per domain; each header sits next to its source):
 ```
 C:\zw\app\
 ├── CMakeLists.txt
+├── cmd_sections.ld          # linker fragment declaring the "cmd" iterable ROM section
 ├── prj.conf
-└── src\main.c
+└── src\
+    ├── main.c               # startup wiring only (peripheral init + default action)
+    ├── led_ctrl.c/.h        # LED0 + blink thread + "led" command
+    ├── pl10_adc.c/.h        # ADC0 register driver + stream thread + "adc" command
+    ├── cmd_parser.c         # console infrastructure (line editor, history, dispatch) + "help"
+    ├── cmd.h                # command-registry interface + CMD_REGISTER macro
+    ├── diag.c               # "reset"/"threads"/"mem" system commands
+    ├── fault.c              # k_sys_fatal_error_handler override (names the faulting thread)
+    └── app_threads.h        # central thread stack/priority budgets
 ```
 
 **`C:\zw\app\CMakeLists.txt`:**
@@ -192,7 +203,13 @@ C:\zw\app\
 cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(pic32cm_pl10_blinky_shell)
-target_sources(app PRIVATE src/main.c)
+target_sources(app PRIVATE
+    src/main.c src/led_ctrl.c src/pl10_adc.c src/cmd_parser.c src/fault.c src/diag.c)
+
+# Declare the "cmd" console-command registry as an iterable ROM section (see
+# cmd_sections.ld + cmd.h). SECTIONS (not ROM_SECTIONS): ITERABLE_SECTION_ROM
+# already places itself into the ROMABLE_REGION.
+zephyr_linker_sources(SECTIONS cmd_sections.ld)
 ```
 
 **`C:\zw\app\prj.conf`:**
@@ -202,145 +219,89 @@ CONFIG_SERIAL=y
 CONFIG_CONSOLE=y
 CONFIG_UART_CONSOLE=y
 CONFIG_LOG=n
+CONFIG_REBOOT=y
 
-# Lean custom command parser instead of the Zephyr shell subsystem - see the note
-# below for why.
+# Print the boot banner ourselves (with a leading newline, so it survives a
+# fault-reboot's non-newline-terminated dump) - disable Zephyr's own.
+CONFIG_BOOT_BANNER=n
+
+# Char-by-char console (not the shell subsystem, not line mode) so the
+# hand-rolled editor can implement Up/Down history - line mode drops the arrow
+# escape sequences. GETCHAR and GETLINE are a mutually exclusive Kconfig choice.
 CONFIG_CONSOLE_SUBSYS=y
-CONFIG_CONSOLE_GETLINE=y
+CONFIG_CONSOLE_GETCHAR=y
 
 # Kernel's fixed baseline stacks trimmed from their defaults (ISR_STACK_SIZE 2048,
 # MAIN_STACK_SIZE 1024) - see the second note below for the risk and how this was
 # verified.
 CONFIG_ISR_STACK_SIZE=1024
 CONFIG_MAIN_STACK_SIZE=512
+
+# Thread introspection for the "threads" command (live per-thread stack usage).
+CONFIG_THREAD_MONITOR=y
+CONFIG_THREAD_NAME=y
+CONFIG_THREAD_MAX_NAME_LEN=16
+CONFIG_THREAD_STACK_INFO=y
+CONFIG_INIT_STACKS=y
+
+# Software stack-overflow detection (this Cortex-M0+ has no MPU, so the hardware
+# option CONFIG_HW_STACK_PROTECTION is unavailable).
+CONFIG_STACK_SENTINEL=y
+
+# On a fatal error, print the dump and reboot instead of halting forever.
+CONFIG_RESET_ON_FATAL_ERROR=y
 ```
 
 > **This app originally used `CONFIG_SHELL` (full Zephyr shell subsystem: `on`/`off`/`toggle`/`blink` as shell subcommands with a `pl10:~$` prompt, tab completion, `help`).** On this 8 KB-RAM part that turned out to be a poor fit: `west build -d C:\zw\build -t ram_report` showed the shell subsystem alone at **47% of total RAM** — a 2048-byte thread stack plus a 512-byte history heap, for four trivial GPIO commands. Even after trimming (`CONFIG_SHELL_STACK_SIZE=1536`, `CONFIG_SHELL_HISTORY=n`, `CONFIG_SHELL_GETOPT=n` — chosen after `1024` caused a **hard fault** running `help`, which walks the whole command tree and needs more stack depth than any single app command) RAM usage was still 83.50%, next to no headroom for real application logic.
 >
-> **Replaced with `console_getline()`** — Zephyr's built-in lightweight pull-style line reader (`zephyr/console/console.h`), which runs synchronously in the calling thread with no shell thread/stack/history buffers of its own. Combined with a `k_timer` to decouple LED blinking from command reading (see `main.c` below), this dropped usage to **FLASH 26.71% (16408 B, was 66.56%) and RAM 52.25% (4280 B, was 83.50%)** — verified stable and functionally identical via the same `pyserial` test as before (all `led` subcommands plus an unknown-command case). A hand-written `pl10:~$ ` prompt and `help` command were added back afterward for UX parity with the old shell (see `main.c`) — cost was **only +260 B flash, +0 B RAM** (static string literals, no new buffers), vs. the shell's ~15 KB flash / ~3.7 KB RAM for the same features. The remaining trade-off: no tab completion/history, and command parsing is hand-rolled `strcmp`/`strncmp` in `main.c` instead of the shell's declarative `SHELL_STATIC_SUBCMD_SET_CREATE` macros — acceptable for a fixed, small command set like this one; reconsider if the command surface grows significantly.
+> **Replaced with `console_getline()`** — Zephyr's built-in lightweight pull-style line reader (`zephyr/console/console.h`), which runs synchronously in the calling thread with no shell thread/stack/history buffers of its own. Combined with a `k_timer` to decouple LED blinking from command reading (see `main.c` below), this dropped usage to **FLASH 26.71% (16408 B, was 66.56%) and RAM 52.25% (4280 B, was 83.50%)** — verified stable and functionally identical via the same `pyserial` test as before (all `led` subcommands plus an unknown-command case). A hand-written `pl10:~$ ` prompt and `help` command were added back afterward for UX parity with the old shell (see `main.c`) — cost was **only +260 B flash, +0 B RAM** (static string literals, no new buffers), vs. the shell's ~15 KB flash / ~3.7 KB RAM for the same features. (These figures and the `k_timer`/`main.c` details describe the `console_getline()` stage; the app has since moved to `console_getchar()` with Up/Down history, per-domain threads, and the link-time command registry described below — so command parsing is no longer a `strcmp` chain in `main.c`. The shell-vs-hand-rolled RAM rationale is what still stands.)
 >
 > **Kernel's fixed baseline stacks trimmed too — `CONFIG_ISR_STACK_SIZE` (default 2048) and `CONFIG_MAIN_STACK_SIZE` (default 1024).** Even after the shell was gone, `ram_report` showed `kernel` at 88% of the (now much smaller) RAM total — almost entirely `z_interrupt_stacks` (2048 B) + `z_main_stack` (1024 B), fixed costs independent of what the app does. **This is riskier to cut than the shell's per-thread stack was**: `ISR_STACK_SIZE` is shared by *every* interrupt in the system (GPIO, UART RX, SysTick/timer) plus kernel init, so its worst-case need is harder to bound than one thread's, and an overflow here is more likely to silently corrupt adjacent memory than to produce a clean fault. Tested at `ISR_STACK_SIZE=1024` / `MAIN_STACK_SIZE=512` (halved) with a deliberately adversarial `pyserial` script: `led blink 10` (10 ms timer-ISR period — the fastest realistic interrupt load in this app) running concurrently with 15 rapid-fire `help` calls (the single deepest `printk` call/format-string stack use in the app) over UART — no fault, no corrupted output, across the whole run. Result: **RAM 52.25%→33.50% (4280 B→2744 B)**. This is an empirical stress test covering this app's actual interrupt surface (GPIO/UART/timer only) under realistic-to-heavy load, **not a formal worst-case stack proof** — if you add new interrupt sources (a new peripheral driver, nested/higher-priority IRQs) later, re-verify with a similar stress test rather than assuming headroom carries over.
 
-**`C:\zw\app\src\main.c`** — blinky plus a minimal command parser (with prompt and `help`) for LED control (on/off/toggle/blink rate) over `console_getline()`. Uses the devicetree alias `led0` that Curiosity Nano boards provide. Blinking runs on a `k_timer` (fires in ISR context) so it keeps going independently while `main()` blocks waiting for the next line:
+**Modules & threads.** `main.c` does startup wiring only — initialize the LED and start the default blink, then return; every other module self-starts via `K_THREAD_DEFINE`. Blinking and ADC streaming each run in their own thread using an interruptible `k_sleep` (woken with `k_wakeup` so a rate change/stop takes effect immediately), rather than a `k_timer` firing in ISR context. Stack sizes and priorities for all app threads are centralized in `app_threads.h`, set with headroom over the live high-water marks the `threads` command reports.
 
+**The command registry (the reusable pattern).** The parser knows nothing about `led`/`adc`/etc. Each command is a `const struct cmd` placed at link time into a custom iterable ROM section named `cmd` — the same mechanism Zephyr's `SHELL_CMD_REGISTER` uses, minus the shell's RAM cost (the table lives in flash, ~0 B RAM). Three pieces:
+
+`src/cmd.h` — interface + registration macro:
 ```c
-#include <zephyr/kernel.h>
-#include <zephyr/drivers/gpio.h>
-#include <zephyr/console/console.h>
-#include <stdlib.h>
-#include <string.h>
-
-#define LED0_NODE DT_ALIAS(led0)
-static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
-
-#define PROMPT "pl10:~$ "
-
-/* Blink interval in ms; 0 = no automatic blinking */
-static volatile uint32_t blink_ms;
-
-static void blink_timer_handler(struct k_timer *timer)
-{
-    gpio_pin_toggle_dt(&led);
-}
-K_TIMER_DEFINE(blink_timer, blink_timer_handler, NULL);
-
-static void led_set_blink(uint32_t ms)
-{
-    blink_ms = ms;
-    if (ms > 0) {
-        k_timer_start(&blink_timer, K_MSEC(ms), K_MSEC(ms));
-    } else {
-        k_timer_stop(&blink_timer);
-    }
-}
-
-static void cmd_led_on(void)
-{
-    led_set_blink(0);
-    gpio_pin_set_dt(&led, 1);
-    printk("led on\n");
-}
-
-static void cmd_led_off(void)
-{
-    led_set_blink(0);
-    gpio_pin_set_dt(&led, 0);
-    printk("led off\n");
-}
-
-static void cmd_led_toggle(void)
-{
-    led_set_blink(0);
-    gpio_pin_toggle_dt(&led);
-    printk("led toggled\n");
-}
-
-static void cmd_led_blink(const char *arg)
-{
-    if (arg == NULL || *arg == '\0') {
-        printk("usage: led blink <ms>\n");
-        return;
-    }
-    uint32_t ms = (uint32_t)strtoul(arg, NULL, 10);
-    led_set_blink(ms);
-    printk("led blink %u ms\n", ms);
-}
-
-static void cmd_help(void)
-{
-    printk("Available commands:\n"
-           "  led on          turn LED on\n"
-           "  led off         turn LED off\n"
-           "  led toggle      toggle LED\n"
-           "  led blink <ms>  blink LED every <ms> ms (0 stops blinking)\n"
-           "  help            show this help\n");
-}
-
-static void handle_line(char *line)
-{
-    if (strcmp(line, "led on") == 0) {
-        cmd_led_on();
-    } else if (strcmp(line, "led off") == 0) {
-        cmd_led_off();
-    } else if (strcmp(line, "led toggle") == 0) {
-        cmd_led_toggle();
-    } else if (strncmp(line, "led blink", 9) == 0) {
-        char *arg = line + 9;
-        while (*arg == ' ') {
-            arg++;
-        }
-        cmd_led_blink(arg);
-    } else if (strcmp(line, "help") == 0) {
-        cmd_help();
-    } else if (*line != '\0') {
-        printk("unknown command: %s\n", line);
-    }
-}
-
-int main(void)
-{
-    if (!gpio_is_ready_dt(&led)) {
-        return 0;
-    }
-    gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);
-    led_set_blink(500);
-
-    console_getline_init();
-
-    printk("\n" PROMPT);
-    while (1) {
-        char *line = console_getline();
-        handle_line(line);
-        printk(PROMPT);
-    }
-    return 0;
-}
+#include <zephyr/sys/iterable_sections.h>
+typedef void (*cmd_fn_t)(int argc, char **argv);
+struct cmd { const char *name; cmd_fn_t fn; const char *help; };
+#define CMD_REGISTER(id, name_, fn_, help_) \
+    static const STRUCT_SECTION_ITERABLE(cmd, _cmd_##id) = { \
+        .name = (name_), .fn = (fn_), .help = (help_) }
 ```
 
+`cmd_sections.ld` — declares the section (emits the `_cmd_list_start`/`_cmd_list_end` bounds that `STRUCT_SECTION_FOREACH` walks):
+```c
+#include <zephyr/linker/iterable_sections.h>
+ITERABLE_SECTION_ROM(cmd, Z_LINK_ITERABLE_SUBALIGN)
+```
+
+A feature module registers its command and owns its own subcommand parsing:
+```c
+static void led_cmd(int argc, char **argv) { /* parse on/off/toggle/blink <ms> */ }
+CMD_REGISTER(led, "led", led_cmd, "led on|off|toggle|blink <ms>  - LED control");
+```
+
+`cmd_parser.c` is generic infrastructure: a `console_getchar()` line editor (with 5-deep Up/Down history), a tokenizer splitting the line into `argc`/`argv`, and dispatch:
+```c
+STRUCT_SECTION_FOREACH(cmd, c)
+    if (strcmp(argv[0], c->name) == 0) { c->fn(argc, argv); return; }
+printk("unknown command: %s\n", argv[0]);
+```
+The built-in `help` iterates the same registry, so there is no second, hand-maintained command list. Adding a command is one `CMD_REGISTER` in its owning module; the parser is never touched.
+
+**Registry gotchas:** entries must be `const` (else they land in RAM, not the ROM section); use `zephyr_linker_sources(SECTIONS ...)` not `ROM_SECTIONS` (the `ITERABLE_SECTION_ROM` macro self-places into ROM); the `KEEP()` inside that macro stops the linker garbage-collecting the never-directly-referenced entries; and `help` order equals link order, not alphabetical.
+
+**Fault attribution (`fault.c`).** Because `CONFIG_LOG=n` compiles out the kernel's own `>>> ZEPHYR FATAL ERROR N` / `Current thread:` lines (they go through `LOG_ERR`), a raw fault/stack-overflow dump on the console can't be tied to a thread. `src/fault.c` overrides the `__weak k_sys_fatal_error_handler()` to `printk` the reason code + `k_thread_name_get(k_current_get())` before rebooting; reboot-vs-halt still follows `CONFIG_RESET_ON_FATAL_ERROR`.
+
+For the full implementation of each module, read the source files — they are self-contained and commented; this runbook documents the *structure and reproducible recipe*, not a line-by-line mirror.
+
 > If the build reports that `led0` is missing: the alias may be named differently on this board. Check the board DTS
-> (`C:\zw\zephyr\boards\...\*pl10*\*.dts`) for the LED alias/label and adjust `LED0_NODE`.
+> (`C:\zw\zephyr\boards\...\*pl10*\*.dts`) for the LED alias/label and adjust the `DT_ALIAS(led0)` node in `led_ctrl.c`.
 >
-> `console_getline()` requires `CONFIG_CONSOLE_GETLINE` (which needs `CONFIG_CONSOLE_SUBSYS` enabled, and depends on `UART_CONSOLE` + the UART driver supporting interrupt-driven RX — already satisfied here by the existing `CONFIG_UART_CONSOLE=y` and the SERCOM UART driver). It must be called via `console_getline_init()` once before first use, and is incompatible with the shell subsystem / `console_getchar()` — don't enable more than one console input mode at once.
+> `CONFIG_CONSOLE_GETCHAR` needs `CONFIG_CONSOLE_SUBSYS` and the UART driver's interrupt-driven RX (satisfied by `CONFIG_UART_CONSOLE=y` + the SERCOM UART driver); call `console_init()` once before first use. `CONSOLE_GETCHAR`, `CONSOLE_GETLINE`, and the shell subsystem are mutually exclusive — enable exactly one console input mode. **Gotcha:** `printk()` and `console_putchar()` are independent output paths on the same UART; mixing them reorders/drops bytes, so all echo/output goes through `printk()` only.
 
 ---
 
@@ -384,18 +345,20 @@ pyocd flash -t <PYOCD_TARGET> -f <PYOCD_FREQUENCY> C:\zw\build\zephyr\zephyr.hex
 
 ## Step 9 — Functional test via the serial console
 
-Connect a Windows terminal (e.g. PuTTY/TeraTerm) to the board's COM port (115200 baud). The prompt `pl10:~$ ` appears (shell replaced by a minimal `console_getline()`-based parser in Step 7, but a hand-written prompt and `help` command were added back for UX parity — see the note there). Type a command and press Enter; it's echoed back, then the response is printed, then the prompt again:
+Connect a Windows terminal (e.g. PuTTY/TeraTerm) to the board's COM port (115200 baud). The prompt `pl10:~$ ` appears (the console is the hand-rolled `console_getchar()` parser + command registry from Step 7, with Up/Down history). Type a command and press Enter; it's echoed back, then the response is printed, then the prompt again:
 
 ```
 pl10:~$ led on
-pl10:~$ led off
-pl10:~$ led toggle
 pl10:~$ led blink 100
-pl10:~$ led blink 1000
+pl10:~$ adc read
+pl10:~$ adc stream start
+pl10:~$ adc stream stop
+pl10:~$ threads
+pl10:~$ mem 0x20000000 64
 pl10:~$ help
 ```
 
-Success criterion: the LED responds as expected (steady on/off, toggling, different blink rates), and each command's response is echoed back (e.g. `led on`, `led toggled`, `led blink 1000 ms`), followed by the prompt. `help` should print the command list. An unrecognized line should print `unknown command: <line>` rather than silently doing nothing.
+Success criteria: the LED responds as expected (steady on/off, toggling, different blink rates); `adc read`/`stream` print samples; `threads` lists each thread's live stack usage; `mem` hex-dumps the address; `help` prints the full command list (assembled from the registry — every registered command appears); Up/Down recalls history; and an unrecognized line prints `unknown command: <line>` rather than silently doing nothing.
 
 > **Automatable for the agent:** Instead of a manual terminal, the functional test can be automated with `pyserial` (comes along via `requirements-base.txt`) — find the COM port via `Get-PnpDevice -PresentOnly | Where-Object { $_.FriendlyName -match "Curiosity Virtual COM|EDBG Virtual COM" }`, then connect with `serial.Serial(<PORT>, 115200)`, send commands (`\r\n`-terminated), and check the responses against the expected strings (`led on`, `led toggled`, `led blink <ms> ms`, …). This fully replaces the manual PuTTY/TeraTerm step and provides a solid success criterion without user interaction.
 

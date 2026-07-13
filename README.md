@@ -151,7 +151,7 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 
 | Path | Purpose |
 |---|---|
-| `app/` | The application: `CMakeLists.txt`, `prj.conf`, and `src/` split one module per domain — `main.c` (startup wiring), `led_ctrl.c` (LED + blink thread), `pl10_adc.c` (ADC driver + stream thread), `cmd_parser.c` (console, line editor, history), `app_threads.h` (central thread stack/priority budgets) |
+| `app/` | The application: `CMakeLists.txt`, `prj.conf`, `cmd_sections.ld` (command-registry linker section), and `src/` split one module per domain — `main.c` (startup wiring), `led_ctrl.c` (LED + blink thread + `led` command), `pl10_adc.c` (ADC driver + stream thread + `adc` command), `cmd_parser.c` (console infrastructure: line editor, history, registry dispatch), `cmd.h` (command-registry interface), `diag.c` (`reset`/`threads`/`mem` commands), `fault.c` (fatal-error handler), `app_threads.h` (central thread stack/priority budgets) |
 | `zephyr/` | Zephyr RTOS source (shallow clone, pinned revision) |
 | `modules/` | Only the HAL/library modules actually needed: `hal_microchip`, `cmsis`, `cmsis_6`, `picolibc` |
 | `build/` | CMake/Ninja build output; `build/zephyr/zephyr.hex` is the flashable artifact |
@@ -169,22 +169,36 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 
 ### Architecture
 
-The app is split one module per functional domain, each owning its own thread. No shell
-subsystem — the command console is hand-rolled on `console_getchar()`.
+The app is split one module per functional domain. No shell subsystem — the command
+console is hand-rolled on `console_getchar()`. `cmd_parser.c` is **feature-agnostic
+infrastructure**: it tokenizes a line and dispatches by looking the command up in a
+flash-resident **command registry**. Each feature module *self-registers* its command with
+one `CMD_REGISTER()` macro (`cmd.h`), so the parser has no dependency on `led_ctrl` /
+`pl10_adc` / `diag` and adding a command touches only its owning module.
 
 ```
-  app/src/  (5 threads: main + idle + the three below)
+  app/src/  (5 threads: main + idle + blink_tid + adc_stream_tid + cmd_tid)
 
-  +----------------+   +----------------+   +-------------------+
-  | cmd_parser.c   |   | led_ctrl.c     |   | pl10_adc.c        |
-  | cmd_tid        |   | blink_tid      |   | adc_stream_tid    |
-  | console_getchar|   | GPIO + blink   |   | ADC0 registers +  |
-  | line editor,   |-->| (led_ctrl.h)   |   | read/stream       |
-  | history,       |-->|                |   | (pl10_adc.h)      |
-  | dispatch       |------------------------>|                   |
-  +-------+--------+   +-------+--------+   +---------+---------+
-          |                   |                      |
-          v                   v                      v
+  +-------------------------------+
+  | cmd_parser.c   (cmd_tid)      |  feature-agnostic console:
+  | console_getchar, line editor, |  tokenize a line, look argv[0]
+  | history, registry dispatch    |  up in the registry, dispatch;
+  |                               |  built-in "help"
+  +---------------+---------------+
+                  |  STRUCT_SECTION_FOREACH(cmd, ...)
+                  v
+  +-------------------------------+  "cmd" iterable ROM section
+  |   command registry  (flash)   |  (cmd.h / CMD_REGISTER, ~0 B RAM)
+  +----^---------^---------^-------+
+       |         |         |   each module self-registers its command
+  +----+---+ +---+------+ +--+-------+
+  |led_ctrl| |pl10_adc  | | diag.c   |
+  |blink_tid| |adc_strm  | | reset    |
+  |GPIO,led| |ADC0 regs | | threads  |
+  | "led"  | | "adc"    | | mem      |
+  +----+---+ +----+-----+ +----+-----+
+       |          |            |     (fault.c overrides the fatal handler)
+       v          v            v
   +-----------------------------------------------------------+
   |  Zephyr RTOS kernel   (GPIO, UART, clock drivers)         |
   +----------------------------+------------------------------+
