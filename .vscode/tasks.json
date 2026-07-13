@@ -39,10 +39,39 @@
             "presentation": { "reveal": "always", "panel": "shared" }
         },
         {
+            // pyOCD flash fails with "SWD/JTAG communication failure (FAULT ACK)"
+            // when the Cortex-M0+ is asleep (idle WFI) or the DAP is in a bad
+            // state - it cannot halt the core during the pack's ResetCatchSet
+            // debug sequence. A standalone reset first clears that (the flash
+            // pendant to the debugger's "monitor reset halt" - see RUNBOOK.md
+            // Step 11c/11e). Target/frequency match board.cmake.
+            "label": "Zephyr: Reset (pyOCD)",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/Scripts/pyocd.exe",
+            "args": ["reset", "-t", "pic32cm6408pl10048", "-f", "100000"],
+            "options": { "cwd": "${workspaceFolder}/build" },
+            "problemMatcher": [],
+            "presentation": { "reveal": "always", "panel": "shared" }
+        },
+        {
+            // Reset + flash in ONE terminal, sequentially, so the reset
+            // IMMEDIATELY precedes the flash connect. (A separate dependsOn reset
+            // task runs in its own terminal - too big a gap, and it silently gets
+            // skipped if VS Code hasn't reloaded tasks.json.) The reset clears the
+            // sleeping-core / leftover-debug DAP state that otherwise makes pyOCD
+            // fail with "SWD/JTAG communication failure (FAULT ACK)". --pyocd pins
+            // the flash runner to the venv's pyocd==0.43.0 (never a broken one off
+            // PATH). Pristine build stays as a dependsOn.
+            // IMPORTANT: stop any running debug session AND the "Zephyr: Start GDB
+            // Server (pyOCD)" task first - only one pyocd can hold the probe, a
+            // lingering gdbserver is itself a common cause of the FAULT ACK.
             "label": "Zephyr: Flash",
             "type": "shell",
-            "command": "${workspaceFolder}/.venv/Scripts/west.exe",
-            "args": ["flash"],
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-Command",
+                "& '${workspaceFolder}/.venv/Scripts/pyocd.exe' reset -t pic32cm6408pl10048 -f 100000; & '${workspaceFolder}/.venv/Scripts/west.exe' flash --pyocd '${workspaceFolder}/.venv/Scripts/pyocd.exe'"
+            ],
             "options": { "cwd": "${workspaceFolder}/build" },
             "dependsOn": "Zephyr: Build (pristine)",
             "problemMatcher": [],

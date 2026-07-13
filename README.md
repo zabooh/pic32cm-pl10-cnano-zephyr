@@ -100,6 +100,30 @@ west flash
 > ⚠️ Activate the venv first — calling `west.exe`/`pyocd.exe` by full path without
 > activating works for `build` but not for `flash`. See [Known issues](#known-issues).
 
+**Straight from the clone root** — in `cmd.exe`, after `cd`-ing into the cloned directory,
+build and flash with relative paths only (nothing hardcoded, works on any machine):
+
+```cmd
+.venv\Scripts\activate.bat
+set CMAKE_GENERATOR=Ninja
+cd zephyr
+west build -p always -b pic32cm_pl10_cnano -d ..\build ..\app
+cd ..\build
+west flash
+```
+
+> If `west flash` stops with `SWD/JTAG communication failure (FAULT ACK)`, the core is
+> asleep / the debug port is in a leftover state — or a GDB server still holds the probe
+> (stop any debug session first; only one pyOCD can hold the probe). Reset once and retry,
+> from the `build` dir:
+>
+> ```cmd
+> pyocd reset -t pic32cm6408pl10048 -f 100000
+> west flash
+> ```
+>
+> The VS Code *Zephyr: Flash* task does this reset automatically.
+
 Connect a serial terminal (PuTTY, TeraTerm, ...) to the board's virtual COM port at
 **115200 baud**. A boot banner with the build timestamp prints, then the prompt
 `pl10:~$ `. Type a command and press Enter; **Up/Down arrow** recalls the last five
@@ -179,8 +203,11 @@ subsystem — the command console is hand-rolled on `console_getchar()`.
 
 ## Working in VS Code
 
-Open `C:\zw` itself as the workspace root. `.vscode/extensions.json` will prompt you to
-install the two extensions this setup relies on:
+Open the workspace root itself in VS Code — the cloned directory that contains `app/`,
+`zephyr/`, and `.vscode/` (not a subfolder). The checked-in `.vscode/` configs make
+**build, flash, and debug** work with no per-machine editing (all paths are relative or
+resolved via `${workspaceFolder}` / `${env:USERPROFILE}`). `.vscode/extensions.json` will
+prompt you to install the two extensions this setup relies on:
 
 - **C/C++** (`ms-vscode.cpptools`) — IntelliSense, backed by `build/compile_commands.json`
 - **Cortex-Debug** (`marus25.cortex-debug`) — GDB/pyOCD debugging UI
@@ -191,9 +218,14 @@ install the two extensions this setup relies on:
 - *Zephyr: Menuconfig*
 - *Zephyr: Clean build dir*
 
-**Flash** — Terminal → Run Task → *Zephyr: Flash*. Depends on the pristine build task, so
-it always ships a fresh binary; picks up the board's pinned SWD frequency from
-`board.cmake` automatically.
+**Flash** — Terminal → Run Task → *Zephyr: Flash*. Runs a pristine build, then resets the
+board and flashes in one step — always shipping a fresh binary. The reset first clears the
+sleeping-core / leftover-debug DAP state that otherwise makes flashing fail with
+`SWD/JTAG communication failure (FAULT ACK)` (see [Known issues](#known-issues)). Picks up
+the board's SWD frequency from `board.cmake` automatically. **Stop any debug session and
+the *Start GDB Server (pyOCD)* task before flashing** — only one pyOCD instance can hold
+the USB probe at a time, and a lingering GDB server is itself a common cause of the
+`FAULT ACK`.
 
 **Debug** — Run and Debug panel (`Ctrl+Shift+D`) offers three configs; the reliable one
 on Windows is *Zephyr: Debug (attach to running GDB server) - start server task first!* —
@@ -364,9 +396,13 @@ history work — this section has the current totals).
   WFI idle. Fixed automatically via `monitor reset halt` in the attach configs'
   `postAttachCommands`. Also: put breakpoints inside a loop body, not on the
   `while (1) {` line itself — it only fires once. Full root cause: `RUNBOOK.md` → Step 11c.
-- **`launch.json`/`c_cpp_properties.json` hardcode this machine's SDK path**
-  (`${env:USERPROFILE}/zephyr-sdk-<version>/...`). Update both after reproducing this
-  setup on another machine — they're not parameterized by the reproduction script. See
+- **`launch.json`/`c_cpp_properties.json` reference the SDK via
+  `${env:USERPROFILE}/zephyr-sdk-1.0.1/...`.** This is portable across machines as-is:
+  `${env:USERPROFILE}` resolves per user automatically, and the version segment matches
+  the SDK the reproduction script pins and installs to the default per-user location. So
+  on a normal clone-and-reproduce, **no editing is needed**. Hand-edit both files only if
+  you install the SDK somewhere other than that default location, or bump the SDK version
+  (in which case also update `$SDK_VER` in `reproduce-install.ps1` to match). See
   `RUNBOOK.md` → Step 11 for the full rationale and JSON.
 
 ## What is `RUNBOOK.md`?
