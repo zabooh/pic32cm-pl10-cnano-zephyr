@@ -20,10 +20,10 @@
  * / no stack sentinel here). Re-check with "threads" after touching a thread's
  * call path (e.g. a deeper driver call, printf format).
  */
-#define BLINK_THREAD_STACK_SIZE       512
+#define BLINK_THREAD_STACK_SIZE       352
 #define BLINK_THREAD_PRIORITY         7
 
-#define ADC_STREAM_THREAD_STACK_SIZE  512
+#define ADC_STREAM_THREAD_STACK_SIZE  352
 #define ADC_STREAM_THREAD_PRIORITY    7
 
 #define CMD_THREAD_STACK_SIZE         640
