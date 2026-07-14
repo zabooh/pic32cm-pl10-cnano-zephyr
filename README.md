@@ -173,6 +173,10 @@ adc: streaming every 500 ms
 adc: 3688 (2.972 V)
 ...
 pl10:~$ adc stream stop
+pl10:~$ button
+button: released
+pl10:~$ button: pressed      <-- printed on its own when you press SW0
+button: released
 pl10:~$ reset
 ```
 
