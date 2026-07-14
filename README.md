@@ -831,6 +831,18 @@ devicetree overlay plus a `pm_state_set()` that writes `SLEEPCFG.SLEEPMODE` (the
 also involves wake sources and the `SUPC` regulator) — or waiting for upstream PM support to
 land via a [pin update](#updating-the-zephyr-version-moving-the-pin).
 
+**Why this is the gap to watch.** Ultra-low-power is the PL10's headline strength: the whole
+reason to pick this part for battery-powered, energy-harvesting, loop-powered, or
+wake-on-event designs is its **~2 µA Standby mode with SleepWalking** — autonomous peripherals
+(RTC, touch, ADC via the event system) that keep running and wake the core only on a real
+event, no CPU in between. Under Zephyr today **none of that is reachable**: the best the stock
+idle gives is the ~1.2 mA Idle tier, roughly **600× above** the part's advertised floor. So for
+exactly the class of applications the PL10 is usually chosen for, a proper **Zephyr
+power-management port — Standby plus SleepWalking wake sources — is arguably the single most
+valuable piece of upstream support still missing**, more so than any individual peripheral
+driver. Until it lands, a Zephyr-based PL10 design either implements Standby itself (as above)
+or accepts mA-class idle and forfeits the low-power advantage that motivated the part.
+
 ### How low could it actually go?
 
 The floor is the chip's **Standby** current, ~2 µA. The full ladder at 24 MHz (datasheet
