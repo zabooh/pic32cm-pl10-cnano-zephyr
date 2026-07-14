@@ -44,6 +44,7 @@ path short (Windows' ~260-char limit; see [Quick start](#quick-start)).
 - [Design decisions](#design-decisions)
 - [Updating the Zephyr version](#updating-the-zephyr-version-moving-the-pin)
 - [Bridging a peripheral before Zephyr supports it](#bridging-a-peripheral-before-zephyr-supports-it)
+- [Interrupts and the system tick](#interrupts-and-the-system-tick)
 - [Memory usage](#memory-usage)
 - [Known issues](#known-issues)
 - [What is `RUNBOOK.md`?](#what-is-runbookmd)
@@ -499,10 +500,13 @@ behind a public interface that reveals nothing about how it's implemented.
 
 One caveat this pattern carries: your stopgap doesn't get the real driver's built-in
 locking. The ADC registers are shared by two threads (the `adc` command and the streaming
-thread) with no mutex; it's safe *today* only because both run at equal priority with time
-slicing off, so neither preempts the other mid-conversion — the real Zephyr driver would
-serialize this for you (`adc_context`). If you bridge a peripheral touched from multiple
-threads, either add a small `K_MUTEX` or stay conscious of that assumption.
+thread) with no mutex. It's safe *in practice* only because a full conversion takes
+microseconds — far shorter than the 20 ms round-robin time slice (see
+[Interrupts and the system tick](#interrupts-and-the-system-tick)) — and each thread
+`k_sleep`s between reads, so the scheduler practically never switches threads
+mid-conversion. It is not *guaranteed* safe, which is exactly what the real Zephyr driver
+handles for you (`adc_context` serializes access). If you bridge a peripheral touched from
+multiple threads, either add a small `K_MUTEX` or stay conscious of that assumption.
 
 ### What it looks like from the outside
 
@@ -573,6 +577,64 @@ application interface; **(2)** definitions from the `hal_microchip` pack header;
 **(4)** `|=` / masked writes so you never clobber Zephyr's bits; **(5)** a header comment
 naming it a stopgap with the swap-out plan. Do that, and adopting the eventual upstream
 driver is a one-file change, not a rewrite.
+
+## Interrupts and the system tick
+
+Zephyr sits on the Cortex-M0+ **NVIC** (Nested Vectored Interrupt Controller): each
+peripheral IRQ has a number, an enable bit, and a priority, and the CPU vectors to a
+handler in hardware. Zephyr routes every IRQ through a shared `_isr_wrapper` that looks the
+real handler up in a generated **software ISR table** (`_sw_isr_table[]`), which is what
+`IRQ_CONNECT()` (usually fed from the devicetree `interrupts` property) fills in. Drivers
+register their own ISRs this way — the app itself connects none.
+
+### How many interrupts are actually active here
+
+Exactly **one** peripheral interrupt. The generated table has 16 slots; 15 point at
+`z_irq_spurious` (unused). The only connected entry is:
+
+| Source | IRQ | Why | Handler |
+|---|---|---|---|
+| **SERCOM1 (console UART)** | 8 | receives each typed character (RX), the only event-driven peripheral | `uart_mchp_sercom_g1.c` |
+
+Everything else the app does needs **no** interrupt: the **ADC** is read by busy-polling
+its ready flag (see [Bridging a peripheral…](#bridging-a-peripheral-before-zephyr-supports-it)),
+and the **LED** is a GPIO *output*. `SERCOM0` exists in the SoC devicetree but no handler is
+connected, so its slot stays spurious.
+
+On top of that one peripheral IRQ run the always-on **system exceptions**, which aren't in
+the NVIC table but are what make the RTOS tick:
+
+- **SysTick** — the kernel time source (below).
+- **PendSV** (lowest priority) — performs the actual thread context switch.
+- **SVC** — kernel supervisor calls.
+
+So the whole interrupt surface is effectively **UART + SysTick**. That is why the shared ISR
+stack (`CONFIG_ISR_STACK_SIZE`, 1024 B) runs at only ~⅓ used with lots of headroom — there
+is almost nothing competing on it. **Add an interrupt-driven peripheral later** (a real ADC
+driver with a conversion-done IRQ, UART DMA, a timer capture…) and it gains a slot — at
+which point the ISR-stack stress test in `CLAUDE.md` becomes mandatory again.
+
+### The system tick
+
+The kernel's sense of time comes from three settings (all visible in
+`build/zephyr/.config`):
+
+| Setting | Value | Meaning |
+|---|---|---|
+| `CONFIG_SYS_CLOCK_TICKS_PER_SEC` | **10000** | tick resolution = **100 µs** — the finest granularity for `k_sleep`/timeouts |
+| `CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC` | **24000000** | the SysTick counter itself runs at 24 MHz |
+| `CONFIG_TICKLESS_KERNEL` | **y** | SysTick fires **on demand**, not 10000×/s |
+
+The important nuance is **tickless**: the 10 kHz is a *resolution*, **not** an interrupt
+frequency. SysTick is reprogrammed to interrupt only when the next timeout is actually due,
+so a `k_sleep(K_MSEC(500))` produces **one** SysTick interrupt ~500 ms later, not 5000
+periodic ticks. This keeps the timer's share of the (already tiny) interrupt load down and
+lets the core stay in `WFI` idle between events.
+
+**Scheduling between equal-priority threads** is round-robin: `CONFIG_TIMESLICE_SIZE = 20`
+(ms), applied to all preemptible threads (`CONFIG_TIMESLICE_PRIORITY = 0`). All three app
+threads run at priority 7, so they time-slice against each other every 20 ms — but since
+each does a little work and then `k_sleep`s, none ever burns a full 20 ms slice in practice.
 
 ## Memory usage
 
