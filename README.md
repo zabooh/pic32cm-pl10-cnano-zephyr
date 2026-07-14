@@ -5,8 +5,33 @@ Minimal, from-scratch [Zephyr RTOS](https://www.zephyrproject.org/) workspace fo
 that reproduces the entire installation — RTOS clone, HAL modules, Python venv,
 toolchain, build, and flash — on another Windows machine.
 
+## Start here
+
+**Fresh Windows machine, no Zephyr yet?** Clone this repo, make sure the five host tools
+are present (a helper installs any that are missing), then run the one reproduction
+script. It clones a PL10-tailored Zephyr (~1.8 GB), sets up the toolchain, builds the
+app, and — if a PL10 Curiosity Nano is plugged in — flashes it, all in one go
+(~5–20 min):
+
+```powershell
+git clone https://github.com/zabooh/pic32cm-pl10-cnano-zephyr.git C:\zw
+cd C:\zw
+powershell -ExecutionPolicy Bypass -File install-prerequisites.ps1   # installs any missing host tool; then open a new shell
+powershell -ExecutionPolicy Bypass -File reproduce-install.ps1
+```
+
+`install-prerequisites.ps1` leaves already-installed tools untouched and only pulls the
+pinned version of whatever is missing (Python, Git, Ninja, CMake, 7-Zip, via winget) —
+skip it if you already have all five. **Open a new terminal between the two scripts** so
+freshly installed tools land on `PATH`. Details and exactly what gets version-pinned:
+[Reproducing this setup elsewhere](#reproducing-this-setup-elsewhere). Keep the target
+path short (Windows' ~260-char limit; see [Quick start](#quick-start)).
+
+**Already ran this once and just want to rebuild / re-flash?** → [Quick start](#quick-start).
+
 ## Contents
 
+- [Start here](#start-here)
 - [Executive summary](#executive-summary)
 - [Key takeaways](#key-takeaways)
 - [Quick start](#quick-start)
@@ -156,6 +181,7 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 | `modules/` | Only the HAL/library modules actually needed: `hal_microchip`, `cmsis`, `cmsis_6`, `picolibc` |
 | `build/` | CMake/Ninja build output; `build/zephyr/zephyr.hex` is the flashable artifact |
 | `.venv/` | Python virtual environment (west, pyOCD, build dependencies) |
+| `install-prerequisites.ps1` | Checks for the host tools (Python, Git, Ninja, CMake, 7-Zip) and installs the pinned version of any that are missing (via winget); leaves existing installs untouched |
 | `reproduce-install.ps1` | Pinned, non-interactive script that recreates this whole setup from scratch |
 | `requirements-lock.txt` | Exact pinned versions of every Python package in `.venv` |
 | `.vscode/` | Build/flash tasks, debug configs, and IntelliSense settings for working in VS Code (see below) |
@@ -295,8 +321,11 @@ depending on network speed.
 
 **Two things the script does *not* do for you:**
 - **Prerequisites** — Python (3.12+), Git, Ninja, CMake, and 7-Zip must already be on
-  `PATH`. The script checks for them and stops with a clear error if one is missing; it
-  does not install them.
+  `PATH`. `reproduce-install.ps1` checks for them and stops with a clear error if one is
+  missing; it does not install them. Run **`install-prerequisites.ps1`** first to
+  auto-install (via winget) the pinned version of any that are missing — already-present
+  tools are left untouched. Open a new shell afterwards so newly added `PATH` entries take
+  effect.
 - **Board connection** — the board must be plugged in via USB before the script reaches
   its last step (`pyocd flash`). Everything before that succeeds without it attached.
 
