@@ -43,6 +43,7 @@ path short (Windows' ~260-char limit; see [Quick start](#quick-start)).
 - [Reproducing this setup elsewhere](#reproducing-this-setup-elsewhere)
 - [Design decisions](#design-decisions)
 - [Updating the Zephyr version](#updating-the-zephyr-version-moving-the-pin)
+- [Bridging a peripheral before Zephyr supports it](#bridging-a-peripheral-before-zephyr-supports-it)
 - [Memory usage](#memory-usage)
 - [Known issues](#known-issues)
 - [What is `RUNBOOK.md`?](#what-is-runbookmd)
@@ -434,6 +435,144 @@ and exercised on the board. Two practical notes: you need a *reproduced* workspa
 in — a bare `git clone` has no `zephyr/` yet, so run `reproduce-install.ps1` once first — and
 you can of course follow the steps by hand instead of via Claude; the file reads as a plain
 checklist either way.
+
+## Bridging a peripheral before Zephyr supports it
+
+Sometimes the chip has a peripheral that Zephyr mainline doesn't drive yet — no
+`*_driver_api`, no devicetree binding, nothing to `#include`. You still want to use it now.
+On the PL10 the **ADC** is exactly this case, and this workspace handles it with a
+deliberate pattern worth reusing: a small **stopgap driver** that pokes the hardware
+registers directly today, structured so that swapping in the *real* Zephyr driver later
+touches **only one file**. This section walks that pattern using the ADC
+([`app/src/pl10_adc.c`](app/src/pl10_adc.c) / [`.h`](app/src/pl10_adc.h)) as the worked
+example.
+
+### Why not just wait, or fork Zephyr?
+
+Three options, and why the middle path here is the pragmatic one:
+
+- **Wait for upstream support** — blocks your project on someone else's release schedule.
+- **Patch `zephyr/`** to add the driver and a devicetree node yourself — but this workspace
+  pins a third-party Zephyr to one exact commit and treats everything outside `app/` as
+  read-only (see [Design decisions](#design-decisions)). Editing the pinned tree fights the
+  reproducibility the whole setup is built on, and your patch evaporates on the next clone.
+- **Bridge it inside `app/`** — a self-contained module that accesses the peripheral's
+  registers directly, hidden behind an ordinary interface. Nothing outside `app/` changes,
+  so reproducibility is intact. This is what the ADC module does.
+
+For the PL10 ADC specifically, the direct route was the *only* option without forking:
+its register map matches neither in-tree Microchip ADC driver (`adc_mchp_g1`, `adc_sam0`),
+and with no ADC devicetree node there's nothing for Zephyr's `clock_control`/`pinctrl` to
+hang off either.
+
+### The pattern — five rules that keep the later swap cheap
+
+The entire point is **isolation**: concentrate everything hardware-specific in one module,
+behind a public interface that reveals nothing about how it's implemented.
+
+1. **Two layers in one module, one stable interface.** `pl10_adc.c` has a low-level
+   *register driver* (`pl10_adc_init()`, `pl10_adc_read()`) and, on top, an *application
+   service* (`pl10_adc_read_once()`, the streaming thread, the `adc` console command). Only
+   the service layer is exported — [`pl10_adc.h`](app/src/pl10_adc.h) declares
+   `pl10_adc_read_once()` / `pl10_adc_stream_set()` and nothing about registers. Callers
+   (`cmd_parser.c`, `diag.c`) never learn it's a stopgap, so when the internals change they
+   don't.
+2. **Get register definitions from the HAL pack header, not hand-typed addresses.** The
+   module includes `pic32cm6408pl10048.h` from the `hal_microchip` module — the same
+   register/bitfield definitions the CMSIS world uses (`ADC0_REGS->ADC_CTRLA`,
+   `MCLK_APBCMASK_ADC0_Msk`, …). No magic numbers, and it stays readable next to the
+   datasheet.
+3. **Cross-verify every hardware fact against independent sources.** The clock enable
+   (`MCLK.APBCMASK` bit 7, no GCLK channel needed) and the pin (**AIN29 / PA29**, the one
+   ADC-capable pin this board breaks out) were each confirmed against *three* sources that
+   agree: the datasheet (DS40002667A §11.6.8, §33.4.2.5), a bare-metal CMSIS reference, and
+   Microchip's official Harmony reference app for this exact board
+   (`csp_apps_pic32cm_pl10` v1.0.0). Register-poking has no compiler to catch a wrong bit —
+   the cross-check is the safety net.
+4. **Never clobber what Zephyr already owns.** The clock bit is set with `|=`, not a plain
+   assignment, so it doesn't wipe bits Zephyr's own `clock_control` driver set for other
+   peripherals in the same register; the pin-mux write masks a single nibble so it leaves
+   the neighbouring pin alone. A stopgap shares silicon with the RTOS — touch only your bits.
+5. **Mark it loudly as a stopgap.** The header comment says what it is, why direct access
+   was necessary, and *"replace this with a proper Zephyr driver once upstream support
+   lands."* `CLAUDE.md` repeats it. The exit strategy is documented before it's needed.
+
+One caveat this pattern carries: your stopgap doesn't get the real driver's built-in
+locking. The ADC registers are shared by two threads (the `adc` command and the streaming
+thread) with no mutex; it's safe *today* only because both run at equal priority with time
+slicing off, so neither preempts the other mid-conversion — the real Zephyr driver would
+serialize this for you (`adc_context`). If you bridge a peripheral touched from multiple
+threads, either add a small `K_MUTEX` or stay conscious of that assumption.
+
+### What it looks like from the outside
+
+Nothing about the stopgap leaks to the user. Over the serial console it's just:
+
+```
+pl10:~$ adc read
+adc: 3676 (2.962 V)
+pl10:~$ adc stream start
+adc: streaming every 500 ms
+```
+
+(On the bare board AIN29 floats, so the value sits noisy near the supply rail — that's
+expected, it confirms the ADC is actually converting.)
+
+### Migrating to the real driver, when it lands
+
+Upstream support arrives by moving the Zephyr pin forward
+([Updating the Zephyr version](#updating-the-zephyr-version-moving-the-pin)) to a commit
+that ships both an ADC driver for this IP and an ADC devicetree node. Then the migration is
+contained to `pl10_adc.c` — the header and every caller stay put:
+
+| Stopgap today (direct registers) | After (standard Zephyr ADC API) |
+|---|---|
+| `pl10_adc_clock_enable()` | **gone** — the driver clocks itself via `clock_control` |
+| `pl10_adc_pinctrl_enable()` | **gone** — pin comes from `pinctrl` in the devicetree |
+| `pl10_adc_init()` (CTRLA…E register writes) | `ADC_DT_SPEC_GET(...)` + `adc_channel_setup_dt()` |
+| `pl10_adc_read()` (INPUTCTRL/COMMAND/poll) | `adc_read_dt()` into an `adc_sequence` buffer |
+| `counts * 3300 / 4095` | `adc_raw_to_millivolts_dt()` (reads ref/resolution from DT) |
+| `#include <pic32cm6408pl10048.h>`, `ADC0_REGS` | **gone** — no HAL pack header needed |
+
+Concretely:
+
+1. `CONFIG_ADC=y` in `prj.conf` (the specific driver Kconfig auto-selects once the node is
+   enabled).
+2. A board overlay enabling the ADC node and describing the AIN29 channel — roughly:
+   ```dts
+   &adc0 {
+       status = "okay";
+       #address-cells = <1>;
+       #size-cells = <0>;
+       channel@1d {                       /* 0x1d = 29 */
+           reg = <29>;
+           zephyr,gain = "ADC_GAIN_1";
+           zephyr,reference = "ADC_REF_VDD_1";
+           zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+           zephyr,resolution = <12>;
+       };
+   };
+   ```
+   > The exact binding/property names are whatever the upstream driver defines — treat the
+   > snippet above as the *shape*, not the final text, until the driver actually lands.
+3. Rewrite the low-level layer per the table above; leave `pl10_adc_read_once()`,
+   `pl10_adc_stream_set()`, the streaming thread, and the `adc` command untouched.
+4. Build, flash, and confirm `adc read` / `adc stream` behave identically — then re-check
+   `ram_report`/`rom_report`: the ADC subsystem plus a full driver usually costs more RAM
+   than the tiny register poker, which matters on this 8 KB part.
+5. Delete the "stopgap" notes in `CLAUDE.md` and this README.
+
+Because the interface never changed, the concurrency caveat also disappears for free — the
+real driver serializes access internally.
+
+### Reusing the pattern for another peripheral
+
+Same recipe, any unsupported peripheral: **(1)** one module, a register driver under an
+application interface; **(2)** definitions from the `hal_microchip` pack header;
+**(3)** cross-verify clock/pin/register facts against the datasheet *and* a second source;
+**(4)** `|=` / masked writes so you never clobber Zephyr's bits; **(5)** a header comment
+naming it a stopgap with the swap-out plan. Do that, and adopting the eventual upstream
+driver is a one-file change, not a rewrite.
 
 ## Memory usage
 
