@@ -43,6 +43,7 @@ path short (Windows' ~260-char limit; see [Quick start](#quick-start)).
 - [Reproducing this setup elsewhere](#reproducing-this-setup-elsewhere)
 - [Design decisions](#design-decisions)
 - [Updating the Zephyr version](#updating-the-zephyr-version-moving-the-pin)
+- [Peripheral support status](#peripheral-support-status)
 - [Bridging a peripheral before Zephyr supports it](#bridging-a-peripheral-before-zephyr-supports-it)
 - [Interrupts and the system tick](#interrupts-and-the-system-tick)
 - [Memory usage](#memory-usage)
@@ -436,6 +437,51 @@ and exercised on the board. Two practical notes: you need a *reproduced* workspa
 in — a bare `git clone` has no `zephyr/` yet, so run `reproduce-install.ps1` once first — and
 you can of course follow the steps by hand instead of via Claude; the file reads as a plain
 checklist either way.
+
+## Peripheral support status
+
+How much of the PL10 does Zephyr actually drive today? This is a **snapshot of the pinned
+Zephyr revision** (derived from the SoC devicetree plus the drivers present in the tree) —
+it's exactly the kind of thing that moves forward when you
+[update the pin](#updating-the-zephyr-version-moving-the-pin). Two categories matter, and
+the difference is important:
+
+**A — wired up for the PL10 (a devicetree node *and* a matching driver exist).** These work
+today; the ones marked "configure" only need a Kconfig/devicetree opt-in, the driver is
+already there:
+
+| Peripheral | Driver | Status here |
+|---|---|---|
+| Clock / oscillators (GCLK, MCLK, OSC32K, OSCHF, XOSC32K) | `clock_control` (MCHP PIC32CM_PL) | ✅ active |
+| GPIO (PORT) | `gpio_mchp_port_g1` | ✅ active (the LED) |
+| Pin control (PORT) | `pinctrl_mchp_port_g1` | ✅ active |
+| UART (SERCOM) | `uart_mchp_sercom_g1` | ✅ active (the console) |
+| SPI (SERCOM) | `spi_mchp_sercom_g1` | 🟡 driver present, configure to use |
+| I²C (SERCOM) | `i2c_mchp_sercom_g1` | 🟡 driver present, configure to use |
+| DMA | `dma_mchp_dmac_g2` | 🟡 node + driver present, configure to use |
+
+The PL10 exposes **two SERCOM instances** (sercom0/1); each can be a UART **or** SPI **or**
+I²C. So SPI and I²C are only a devicetree/Kconfig change away — no new driver needed.
+(An RTC node exists as part of the clock subsystem, but using it as a general-purpose
+calendar/counter isn't clearly wired in this revision — treat it as uncertain.)
+
+**B — a driver exists in the Zephyr tree, but there is no PL10 devicetree node**, so it is
+*not* usable on the PL10 without doing the work yourself (see the next section):
+
+| Peripheral | Generic driver in tree | Why not on the PL10 |
+|---|---|---|
+| **ADC** | `adc_mchp_g1` | no PL10 ADC node — *and* the PL10 ADC register map doesn't match `adc-g1` anyway. This is exactly why [`pl10_adc.c`](app/src/pl10_adc.c) pokes registers directly. |
+| **Timers / PWM** (TC, TCC) | `tc_g1_pwm`, `tcc_g1_pwm`, `*_counter` | no TC/TCC node in the PL10 devicetree, so **hardware PWM isn't available out of the box** — a precise square wave (e.g. 1 kHz) means bridging a TC timer directly for now. |
+| DAC | `dac_g1`, `dac_g2` | no PL10 node |
+| Watchdog | `wdt_g1` | no PL10 node |
+| Analog comparator | `ac_g1_comparator` | no PL10 node |
+| TRNG / entropy | `trng_g1_entropy` | no PL10 node |
+
+**In short:** clock, GPIO, pin control and UART are ready to go, with SPI/I²C/DMA a short
+configuration step away; the analog and timing blocks (ADC, DAC, TC/TCC/PWM, comparator)
+have no PL10 devicetree node yet and are only reachable through the bridging pattern below.
+Because this tracks upstream, expect the "category B" list to shrink over time — which is
+what the [pin update](#updating-the-zephyr-version-moving-the-pin) is for.
 
 ## Bridging a peripheral before Zephyr supports it
 
