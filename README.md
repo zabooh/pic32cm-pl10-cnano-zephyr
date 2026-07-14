@@ -51,6 +51,8 @@ path short (Windows' ~260-char limit; see [Quick start](#quick-start)).
 - [Memory usage](#memory-usage)
 - [Known issues](#known-issues)
 - [What is `RUNBOOK.md`?](#what-is-runbookmd)
+- [PIC32CM PL10 device series](#pic32cm-pl10-device-series)
+- [Porting to another PL10 device](#porting-to-another-pl10-device)
 
 ## Executive summary
 
@@ -966,3 +968,93 @@ purpose:
 config (CLAUDE.md says so explicitly); you hit a build/flash/debug failure this README's
 [Known issues](#known-issues) doesn't already cover; or you want the *why* behind a
 decision, not just the current end state.
+
+## PIC32CM PL10 device series
+
+This board carries the **PIC32CM6408PL10048** (64 KB flash, 48-pin VQFN), but that's one
+member of a wider PL10 family. They are all the **same Arm Cortex-M0+ @ 24 MHz** silicon with
+the **same peripheral set** — 12-bit 800 ksps ADC, PTC touch, 2× analog comparators, 2×
+SERCOM, TC0-2 + TCC0 (PWM), 32-bit RTC, 2-channel DMAC, WDT, EVSYS/CCL, 1.8–5.5 V operation.
+They differ only in **flash / SRAM size** and **pin count / package**:
+
+| Device | Flash | SRAM | Pin/package options |
+|---|---|---|---|
+| PIC32CM**3204**PL10 | 32 KB | 4 KB | 20 (VQFN, SSOP), 28 (VQFN, SSOP), 32 (TQFP, VQFN) |
+| PIC32CM**6408**PL10 | 64 KB | 8 KB | 28 (VQFN, SSOP), 32 (TQFP, VQFN), **48 (VQFN) ← this board** |
+| PIC32CM**1216**PL10 | 128 KB | 16 KB | 28 (VQFN, SSOP), 32 (TQFP, VQFN) |
+
+The 4-digit code encodes it: `6408` = 64 KB flash / 8 KB SRAM, `3204` = 32/4, `1216` = 128/16;
+the trailing `…10NNN` is the pin count.
+
+**Ordering-suffix key** (to read the part numbers below): temperature grade **I** = industrial
+(−40…+85 °C), **E** = extended (−40…+125 °C); a **T** before the dash = tape-and-reel (else
+tube/tray); package code **/2LX** = 20-pin VQFN, **/3LW** = 28-pin VQFN, **/QZB** = 32-pin
+VQFN, **/PT** = 32-pin TQFP, **/SS** = SSOP, **/6MX** = 48-pin VQFN.
+
+Full orderable part numbers (prices omitted):
+
+```
+32 KB flash / 4 KB SRAM — PIC32CM3204PL10
+  PIC32CM3204PL10020-I/2LX    20 VQFN      PIC32CM3204PL10020-E/2LX    20 VQFN
+  PIC32CM3204PL10020T-I/2LX   20 VQFN T/R  PIC32CM3204PL10020T-E/2LX   20 VQFN T/R
+  PIC32CM3204PL10020-I/SS     20 SSOP      PIC32CM3204PL10020-E/SS     20 SSOP
+  PIC32CM3204PL10020T-I/SS    20 SSOP T/R  PIC32CM3204PL10020T-E/SS    20 SSOP T/R
+  PIC32CM3204PL10028-I/3LW    28 VQFN      PIC32CM3204PL10028-E/3LW    28 VQFN
+  PIC32CM3204PL10028T-I/3LW   28 VQFN T/R  PIC32CM3204PL10028T-E/3LW   28 VQFN T/R
+  PIC32CM3204PL10028-I/SS     28 SSOP      PIC32CM3204PL10028-E/SS     28 SSOP
+  PIC32CM3204PL10028T-I/SS    28 SSOP T/R  PIC32CM3204PL10028T-E/SS    28 SSOP T/R
+  PIC32CM3204PL10032-I/PT     32 TQFP      PIC32CM3204PL10032-E/PT     32 TQFP
+  PIC32CM3204PL10032T-I/PT    32 TQFP T/R  PIC32CM3204PL10032T-E/PT    32 TQFP T/R
+  PIC32CM3204PL10032-I/QZB    32 VQFN      PIC32CM3204PL10032-E/QZB    32 VQFN
+  PIC32CM3204PL10032T-I/QZB   32 VQFN T/R  PIC32CM3204PL10032T-E/QZB   32 VQFN T/R
+
+64 KB flash / 8 KB SRAM — PIC32CM6408PL10
+  PIC32CM6408PL10028-I/3LW    28 VQFN      PIC32CM6408PL10028-E/3LW    28 VQFN
+  PIC32CM6408PL10028T-I/3LW   28 VQFN T/R  PIC32CM6408PL10028T-E/3LW   28 VQFN T/R
+  PIC32CM6408PL10028-I/SS     28 SSOP      PIC32CM6408PL10028-E/SS     28 SSOP
+  PIC32CM6408PL10028T-I/SS    28 SSOP T/R  PIC32CM6408PL10028T-E/SS    28 SSOP T/R
+  PIC32CM6408PL10032-I/PT     32 TQFP      PIC32CM6408PL10032-E/PT     32 TQFP
+  PIC32CM6408PL10032T-I/PT    32 TQFP T/R  PIC32CM6408PL10032T-E/PT    32 TQFP T/R
+  PIC32CM6408PL10032-I/QZB    32 VQFN      PIC32CM6408PL10032-E/QZB    32 VQFN
+  PIC32CM6408PL10032T-I/QZB   32 VQFN T/R  PIC32CM6408PL10032T-E/QZB   32 VQFN T/R
+  PIC32CM6408PL10048-I/6MX    48 VQFN   <-- this board's MCU
+
+128 KB flash / 16 KB SRAM — PIC32CM1216PL10
+  PIC32CM1216PL10028-I/3LW    28 VQFN      PIC32CM1216PL10028-E/3LW    28 VQFN
+  PIC32CM1216PL10028T-I/3LW   28 VQFN T/R  PIC32CM1216PL10028T-E/3LW   28 VQFN T/R
+  PIC32CM1216PL10028-I/SS     28 SSOP      PIC32CM1216PL10032-I/QZB    32 VQFN
+  PIC32CM1216PL10028T-I/SS    28 SSOP T/R  PIC32CM1216PL10032T-I/QZB   32 VQFN T/R
+  PIC32CM1216PL10032-I/PT     32 TQFP
+  PIC32CM1216PL10032T-I/PT    32 TQFP T/R
+```
+
+## Porting to another PL10 device
+
+Because the whole series shares the core, the peripherals, and Zephyr's `pic32cm_pl` HAL,
+porting *within* the family is mostly board bring-up plus a target swap — **not an app
+rewrite**. The app in `app/src/` reaches hardware through devicetree aliases (`led0`, `sw0`)
+and the SERCOM console, so it follows the board definition rather than hard-coding the part.
+How much work depends on which member you target — and, crucially, on **what Zephyr already
+ships for it in the pinned revision**:
+
+| Target | Effort | Why |
+|---|---|---|
+| **Another 64 KB (6408) part** — 28/32/64-pin | **Low** | Zephyr already ships the SoC devicetree (`pic32cm6408pl10028/032/048/064.dtsi`). On a custom board you write a board definition with your pins; swap `$BOARD`/`$PYOCD_TARGET`. |
+| **128 KB (1216)** | **Medium** | Only the memory include (`pic32cm_1216_pl.dtsi`) exists — no per-device dtsi yet, so you'd add one (small, modelled on the 6408 files) or wait for upstream. RAM is generous (16 KB). |
+| **32 KB (3204)** | **High** | No Zephyr SoC support at all in this revision (no dtsi) — you'd add it. And the blocker: **4 KB SRAM won't hold the current 5.2 KB build** — you'd first trim threads/stacks/introspection (see [Memory usage](#memory-usage)). |
+
+Regardless of target, the mechanical changes are the same:
+
+- **Devicetree**: pick the right SoC dtsi and write/adjust a board file for your pins (LED,
+  button, the SERCOM console's pinctrl). If you keep the ADC stopgap, its hard-coded
+  **AIN29 / PA29** pin must exist on your package/board or be repointed
+  (see [Bridging a peripheral…](#bridging-a-peripheral-before-zephyr-supports-it)).
+- **Flashing**: change the pyOCD target (`-t <part>`) — the CMSIS-DAP DFP pack must cover it —
+  and update `$BOARD` / `$PYOCD_TARGET` in `reproduce-install.ps1` and the `.vscode/` configs.
+- **Verify**: rebuild, re-flash, and re-check `ram_report`/`rom_report` — moving *down* in
+  memory is the real constraint, moving up (to 64/128 KB) is free headroom.
+
+The short version: **staying on a 64 KB PL10 is easy** (board file + target swap); **128 KB
+needs a small devicetree addition**; **32 KB needs both SoC enablement and a RAM diet.**
+Moving to a different SoC *family* (a JH, SG, CK…) would be a bigger job — different clock
+tree, pinctrl, and memory map — but still the same app code behind the devicetree.
