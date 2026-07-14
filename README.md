@@ -252,6 +252,13 @@ one `CMD_REGISTER()` macro (`cmd.h`), so the parser has no dependency on `led_ct
   main.c: startup wiring only (led_ctrl_init + default blink).
 ```
 
+**Footprint on the PL10** (8 KB RAM / 60 KB flash): about **4.7 KB RAM (~57 %)** and
+**18.7 KB flash (~30 %)** — RAM is the tight resource, flash is roomy (two-thirds free).
+Most of the RAM is the three app threads (each: its stack — 640 B console, 352 B blink,
+352 B ADC — plus a ~120 B control block); dropping the Zephyr shell in favor of the
+hand-rolled parser is a big part of why a genuinely multi-threaded app still leaves ~43 %
+of RAM free. Full per-symbol breakdown: [Memory usage](#memory-usage).
+
 ## Working in VS Code
 
 Open the workspace root itself in VS Code — the cloned directory that contains `app/`,
@@ -436,15 +443,15 @@ introspection, five threads):
 
 | | Used | Capacity | % used |
 |---|---|---|---|
-| RAM | 5,000 B | 8,192 B | **61.04%** |
-| Flash | 18,488 B | 61,440 B | **30.09%** |
+| RAM | 4,687 B | 8,192 B | **57.21%** |
+| Flash | 18,672 B | 61,440 B | **30.39%** |
 
 Check live numbers with `west build -d C:\zw\build -t ram_report` / `-t rom_report`
 (per-symbol breakdown) — or, on the running board, the **`threads`** console command,
 which prints each thread's live stack high-water mark.
 
-Most of the RAM is the three application threads — each `k_thread` costs its stack (512 B
-blink, 512 B ADC stream, 640 B console) plus a 120 B thread control block, all directly
+Most of the RAM is the three application threads — each `k_thread` costs its stack (352 B
+blink, 352 B ADC stream, 640 B console) plus a 120 B thread control block, all directly
 visible in `ram_report`. Those stack sizes live in one place (`app_threads.h`) and were
 set with headroom over the measured high-water marks — the `threads` command flagged the
 first cut (256/320 B) as running at 100%/97%, so they were bumped. As a runtime safety
