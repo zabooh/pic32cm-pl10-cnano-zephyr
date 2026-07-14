@@ -1,0 +1,29 @@
+/*
+ * Application devicetree overlay for the PIC32CM PL10 Curiosity Nano.
+ *
+ * Zephyr's board support defines only led0 (PB2), not the on-board user switch.
+ * The PIC32CM PL10 Curiosity Nano User Guide (DS50004003, section 4.2
+ * "Mechanical Switch") puts SW0 on PB03: pressing it pulls the pin to GND, and
+ * there is no external pull-up, so it is active-low and needs the MCU's internal
+ * pull-up enabled. This overlay adds it as a gpio-keys node with an `sw0` alias;
+ * button.c reads it via GPIO_DT_SPEC_GET (no CONFIG_INPUT needed - the node is
+ * just data we read with the GPIO API).
+ */
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+	buttons {
+		compatible = "gpio-keys";
+
+		sw0: button_0 {
+			gpios = <&portb 3 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			label = "SW0";
+			zephyr,code = <INPUT_KEY_0>;
+		};
+	};
+
+	aliases {
+		sw0 = &sw0;
+	};
+};

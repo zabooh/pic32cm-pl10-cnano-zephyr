@@ -29,4 +29,7 @@
 #define CMD_THREAD_STACK_SIZE         640
 #define CMD_THREAD_PRIORITY           7
 
+#define BUTTON_THREAD_STACK_SIZE      384
+#define BUTTON_THREAD_PRIORITY        7
+
 #endif /* APP_THREADS_H_ */
