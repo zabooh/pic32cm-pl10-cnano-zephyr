@@ -59,12 +59,13 @@ serial command line — built to answer one question: **can Zephyr RTOS run comf
 an 8 KB-RAM microcontroller**, or does it need a beefier part to be worth using?
 
 - Interactive serial commands: `led on/off/toggle/blink <ms>`, `adc read`,
-  `adc stream start/stop`, `reset`, `threads` (live per-thread stack usage),
-  `mem <addr>` (raw hex dump), `help` — with a hand-rolled line editor featuring
-  bash-style Up/Down command history, and a boot banner stamped with the build time
-- Genuinely multi-threaded: five threads (LED blink, ADC stream, command console, plus
-  the kernel's main/idle) — a real RTOS app, not a superloop; a `threads` command shows
-  each one's live stack high-water mark
+  `adc stream start/stop`, `button` (read the SW0 user button), `reset`,
+  `threads` (live per-thread stack usage), `mem <addr>` (raw hex dump), `help` — with a
+  hand-rolled line editor featuring bash-style Up/Down command history, and a boot banner
+  stamped with the build time
+- Genuinely multi-threaded: six threads (LED blink, ADC stream, command console, button
+  watcher, plus the kernel's main/idle) — a real RTOS app, not a superloop; a `threads`
+  command shows each one's live stack high-water mark
 - Fully reproducible setup: one script rebuilds the whole toolchain (Zephyr, HAL
   modules, SDK, Python deps) from scratch on any Windows machine, pinned to exact
   versions
@@ -72,8 +73,8 @@ an 8 KB-RAM microcontroller**, or does it need a beefier part to be worth using?
   (not the dozens of unrelated HALs/subsystems a default `west update` would pull in),
   keeping the whole installation **under 2 GB** instead of several GB
 - VS Code integration: build/flash tasks, source-line debugging, IntelliSense
-- Only **61% RAM / 29% flash** used of this board's 8 KB RAM / 60 KB flash — still
-  ~39% of RAM free with all of the above running (thread introspection included)
+- Only **64% RAM / 31% flash** used of this board's 8 KB RAM / 60 KB flash — still
+  ~36% of RAM free with all of the above running (thread introspection included)
 
 Where to go from here:
 - Just want to build and flash it? → [Quick start](#quick-start)
@@ -85,8 +86,8 @@ Where to go from here:
 - Zephyr RTOS runs comfortably on the PIC32CM PL10's 8 KB RAM — contrary to the common
   assumption that it needs a bigger part.
 - A real multi-threaded interactive app (LED blink + ADC streaming + a command console
-  with history + thread introspection, five threads total) still leaves **~39% of RAM
-  free** — 5,000 B used of 8 KB. A bare blinky started far lower (2,744 B / 33.50%; see
+  with history + a button watcher + thread introspection, six threads total) still leaves
+  **~36% of RAM free** — 5,232 B used of 8 KB. A bare blinky started far lower (2,744 B / 33.50%; see
   [Memory usage](#memory-usage)).
 - The entire toolchain — Zephyr revision, HAL modules, SDK, Python packages — is
   version-pinned and reproducible with one script on a fresh Windows machine.
@@ -182,7 +183,7 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 
 | Path | Purpose |
 |---|---|
-| `app/` | The application: `CMakeLists.txt`, `prj.conf`, `cmd_sections.ld` (command-registry linker section), and `src/` split one module per domain — `main.c` (startup wiring), `led_ctrl.c` (LED + blink thread + `led` command), `pl10_adc.c` (ADC driver + stream thread + `adc` command), `cmd_parser.c` (console infrastructure: line editor, history, registry dispatch), `cmd.h` (command-registry interface), `diag.c` (`reset`/`threads`/`mem` commands), `fault.c` (fatal-error handler), `app_threads.h` (central thread stack/priority budgets) |
+| `app/` | The application: `CMakeLists.txt`, `prj.conf`, `app.overlay` (SW0 user-button devicetree node), `cmd_sections.ld` (command-registry linker section), and `src/` split one module per domain — `main.c` (startup wiring), `led_ctrl.c` (LED + blink thread + `led` command), `pl10_adc.c` (ADC driver + stream thread + `adc` command), `button.c` (SW0 read + press-notifier thread + `button` command), `cmd_parser.c` (console infrastructure: line editor, history, registry dispatch), `cmd.h` (command-registry interface), `diag.c` (`reset`/`threads`/`mem` commands), `fault.c` (fatal-error handler), `app_threads.h` (central thread stack/priority budgets) |
 | `zephyr/` | Zephyr RTOS source (shallow clone, pinned revision) |
 | `modules/` | Only the HAL/library modules actually needed: `hal_microchip`, `cmsis`, `cmsis_6`, `picolibc` |
 | `build/` | CMake/Ninja build output; `build/zephyr/zephyr.hex` is the flashable artifact |
@@ -203,10 +204,12 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 
 **In plain words:** the app in `app/` is a small firmware that blinks an LED and listens
 for typed commands over the serial port. You type a command in a terminal and the board
-acts on it — control the LED (`led`), read the analog input (`adc`), inspect the running
-threads or raw memory (`threads`, `mem`), or reboot (`reset`); **Up/Down** recalls previous
-commands. It's deliberately a real multi-threaded RTOS app — the LED blink, the ADC stream,
-and the console run concurrently, not in one big loop — as a demonstration that Zephyr fits
+acts on it — control the LED (`led`), read the analog input (`adc`), read the user button
+(`button`), inspect the running threads or raw memory (`threads`, `mem`), or reboot
+(`reset`); **Up/Down** recalls previous commands. Pressing the on-board button also prints a
+message on its own. It's deliberately a real multi-threaded RTOS app — the LED blink, the ADC
+stream, the button watcher, and the console run concurrently, not in one big loop — as a
+demonstration that Zephyr fits
 comfortably on this 8 KB-RAM chip. The organizing idea is **one small module per job**,
 wired together through a tiny flash-resident command registry instead of Zephyr's
 RAM-heavy shell.
@@ -219,7 +222,7 @@ one `CMD_REGISTER()` macro (`cmd.h`), so the parser has no dependency on `led_ct
 `pl10_adc` / `diag` and adding a command touches only its owning module.
 
 ```
-  app/src/  (5 threads: main + idle + blink_tid + adc_stream_tid + cmd_tid)
+  app/src/  (6 threads: main + idle + blink_tid + adc_stream_tid + cmd_tid + button_tid)
 
   +-------------------------------+
   | cmd_parser.c   (cmd_tid)      |  feature-agnostic console:
@@ -229,18 +232,18 @@ one `CMD_REGISTER()` macro (`cmd.h`), so the parser has no dependency on `led_ct
   +---------------+---------------+
                   |  STRUCT_SECTION_FOREACH(cmd, ...)
                   v
-  +-------------------------------+  "cmd" iterable ROM section
-  |   command registry  (flash)   |  (cmd.h / CMD_REGISTER, ~0 B RAM)
-  +----^---------^---------^-------+
-       |         |         |   each module self-registers its command
-  +----+---+ +---+------+ +--+-------+
-  |led_ctrl| |pl10_adc  | | diag.c   |
-  |blink_tid| |adc_strm  | | reset    |
-  |GPIO,led| |ADC0 regs | | threads  |
-  | "led"  | | "adc"    | | mem      |
-  +----+---+ +----+-----+ +----+-----+
-       |          |            |     (fault.c overrides the fatal handler)
-       v          v            v
+  +-------------------------------------------+  "cmd" iterable ROM section
+  |          command registry  (flash)        |  (cmd.h / CMD_REGISTER, ~0 B RAM)
+  +---^---------^---------^---------^----------+
+      |         |         |         |   each module self-registers its command(s)
+  +---+----+ +--+-----+ +-+------+ +-+------+
+  |led_ctrl| |pl10_adc| |button.c| | diag.c |
+  |blink_ti| |adc_strm| |button_t| | reset  |
+  | GPIO   | | ADC0   | | SW0    | | threads|
+  | "led"  | | "adc"  | |"button"| | mem    |
+  +---+----+ +--+-----+ +-+------+ +-+------+
+      |         |         |          |    (fault.c overrides the fatal handler)
+      v         v         v          v
   +-----------------------------------------------------------+
   |  Zephyr RTOS kernel   (GPIO, UART, clock drivers)         |
   +----------------------------+------------------------------+
@@ -257,11 +260,11 @@ one `CMD_REGISTER()` macro (`cmd.h`), so the parser has no dependency on `led_ct
   main.c: startup wiring only (led_ctrl_init + default blink).
 ```
 
-**Footprint on the PL10** (8 KB RAM / 60 KB flash): about **4.7 KB RAM (~57 %)** and
-**18.7 KB flash (~30 %)** — RAM is the tight resource, flash is roomy (two-thirds free).
-Most of the RAM is the three app threads (each: its stack — 640 B console, 352 B blink,
-352 B ADC — plus a ~120 B control block); dropping the Zephyr shell in favor of the
-hand-rolled parser is a big part of why a genuinely multi-threaded app still leaves ~43 %
+**Footprint on the PL10** (8 KB RAM / 60 KB flash): about **5.1 KB RAM (~64 %)** and
+**19 KB flash (~31 %)** — RAM is the tight resource, flash is roomy (two-thirds free).
+Most of the RAM is the four app threads (each: its stack — 640 B console, 384 B button,
+352 B blink, 352 B ADC — plus a ~120 B control block); dropping the Zephyr shell in favor of
+the hand-rolled parser is a big part of why a genuinely multi-threaded app still leaves ~36 %
 of RAM free. Full per-symbol breakdown: [Memory usage](#memory-usage).
 
 ## Working in VS Code
@@ -478,6 +481,7 @@ calendar/counter isn't clearly wired in this revision — treat it as uncertain.
 | Watchdog | `wdt_g1` | no PL10 node |
 | Analog comparator | `ac_g1_comparator` | no PL10 node |
 | TRNG / entropy | `trng_g1_entropy` | no PL10 node |
+| **GPIO pin interrupts** (EIC) | `intc_mchp_eic_g1` | no EIC node — so `gpio_pin_interrupt_configure()` returns `-ENOTSUP`; the SW0 button (`button.c`) polls instead |
 
 **In short:** clock, GPIO, pin control and UART are ready to go, with SPI/I²C/DMA a short
 configuration step away; the analog and timing blocks (ADC, DAC, TC/TCC/PWM, comparator)
@@ -662,6 +666,12 @@ is almost nothing competing on it. **Add an interrupt-driven peripheral later** 
 driver with a conversion-done IRQ, UART DMA, a timer capture…) and it gains a slot — at
 which point the ISR-stack stress test in `CLAUDE.md` becomes mandatory again.
 
+**No GPIO pin interrupts here.** One consequence of this minimal surface: the SW0 user
+button (`button.c`) can't fire an interrupt on press. On this SoC a GPIO edge is routed
+through the External Interrupt Controller (EIC), and this Zephyr revision has no EIC
+devicetree node for the PL10 — so `gpio_pin_interrupt_configure()` returns `-ENOTSUP` and the
+button is polled every 50 ms instead (see [Peripheral support status](#peripheral-support-status)).
+
 ### The system tick
 
 The kernel's sense of time comes from three settings (all visible in
@@ -733,9 +743,11 @@ two places already discussed:
 When no thread is ready to run, Zephyr runs the **idle thread**, which executes a **`WFI`**
 (Wait For Interrupt) — so on this firmware the core is **halted the vast majority of the
 time**. The pattern is always the same: wake on an interrupt → do a few microseconds of work
-(toggle the LED, handle a console character) → go back to `WFI`. For the 500 ms blink that
-means the core is genuinely asleep for ~500 ms at a stretch; the "actually computing" duty
-cycle here is well under 1 %.
+(toggle the LED, read the button, handle a console character) → go back to `WFI`. The button
+watcher polls SW0 every 50 ms, so the core wakes at least ~20×/s and sleeps in ≤50 ms chunks
+(without that poller the 500 ms blink alone would let it sleep ~500 ms at a stretch); either
+way the "actually computing" duty cycle stays well under 1 %, since each wake is only
+microseconds.
 
 **"Halted" is a light sleep, not "off":**
 
@@ -846,24 +858,35 @@ coin cell, versus roughly a **week** at today's 1.2 mA continuous `WFI`. All of 
 the figures are room-temperature typicals, and the Curiosity Nano board itself (debugger, LED)
 draws more — a real µA design needs a board built for it.
 
+**What the button watcher costs.** `button.c` polls SW0 every 50 ms, so the core now wakes
+~20×/s instead of ~2×/s. In *this* build that barely moves the average current: `WFI` draws
+its 1.2 mA continuously whether the core sleeps in 50 ms or 500 ms chunks, and the extra wakes
+are only microseconds of compute — so it stays ~1.2 mA. Where it *would* bite is a Standby
+design: waking 20×/s can't reach the ~2 µA floor, pushing the average into the tens of µA and
+erasing most of the Standby benefit. Getting both the button *and* µA sleep would need an
+**event-driven (interrupt) button** so the core only wakes on a real press — but that needs
+the EIC, which the PL10 lacks in this Zephyr (see
+[Peripheral support status](#peripheral-support-status)), which is exactly why `button.c`
+polls instead.
+
 ## Memory usage
 
 This board has only 8 KB RAM / 60 KB flash, so usage is worth watching, not just "does it
-fit." Current build (LED blink + ADC + command console with history + thread
-introspection, five threads):
+fit." Current build (LED blink + ADC + command console with history + a button watcher +
+thread introspection, six threads):
 
 | | Used | Capacity | % used |
 |---|---|---|---|
-| RAM | 4,687 B | 8,192 B | **57.21%** |
-| Flash | 18,672 B | 61,440 B | **30.39%** |
+| RAM | 5,232 B | 8,192 B | **63.87%** |
+| Flash | 19,128 B | 61,440 B | **31.13%** |
 
 Check live numbers with `west build -d C:\zw\build -t ram_report` / `-t rom_report`
 (per-symbol breakdown) — or, on the running board, the **`threads`** console command,
 which prints each thread's live stack high-water mark.
 
-Most of the RAM is the three application threads — each `k_thread` costs its stack (352 B
-blink, 352 B ADC stream, 640 B console) plus a 120 B thread control block, all directly
-visible in `ram_report`. Those stack sizes live in one place (`app_threads.h`) and were
+Most of the RAM is the four application threads — each `k_thread` costs its stack (352 B
+blink, 352 B ADC stream, 640 B console, 384 B button) plus a 120 B thread control block, all
+directly visible in `ram_report`. Those stack sizes live in one place (`app_threads.h`) and were
 set with headroom over the measured high-water marks — the `threads` command flagged the
 first cut (256/320 B) as running at 100%/97%, so they were bumped. As a runtime safety
 net, `CONFIG_STACK_SENTINEL` is enabled (this MPU-less Cortex-M0+ can't use hardware stack
