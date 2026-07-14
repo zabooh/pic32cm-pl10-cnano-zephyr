@@ -35,7 +35,9 @@ If `west flash` fails with `SWD/JTAG communication failure (FAULT ACK)`, the cor
 ```powershell
 powershell -ExecutionPolicy Bypass -File C:\zw\reproduce-install.ps1
 ```
-Non-interactive; pins the Zephyr commit, west/SDK/pyOCD versions, module filters, and Python deps (`requirements-lock.txt`). Ends with its own build+flash verification.
+Non-interactive; pins the Zephyr commit, west/SDK/pyOCD versions, module filters, and Python deps (`requirements-lock.txt`). Ends with its own build+flash verification. A companion `install-prerequisites.ps1` checks for the host tools (Python/Git/Ninja/CMake/7-Zip) and installs the pinned version of any that are missing via winget (leaves existing installs untouched) — run it first on a bare machine.
+
+**Updating the Zephyr pin (e.g. to pick up new upstream PL10 support):** don't edit `$ZEPHYR_REV` blind — follow `RUNBOOK-update-zephyr-pin.md`, an agent-driven interview runbook that asks for the target commit, moves the pin in the live clone (`git checkout` + `west update`, since `west update` never touches `zephyr/` itself), walks every fallstrick (project-filter widening, SDK/west bumps, RAM/flash headroom, new-interrupt ISR-stack re-test), and only *then* persists the pin to `reproduce-install.ps1`. Background on the mechanism: `RUNBOOK.md` → Appendix B.
 
 **VS Code:** open `C:\zw` as the workspace root; `.vscode/tasks.json` and `.vscode/launch.json` wrap the same build/flash/debug commands (see README.md "Working in VS Code" for the task/config names).
 
