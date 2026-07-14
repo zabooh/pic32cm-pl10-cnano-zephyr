@@ -800,6 +800,19 @@ on-board nEDBG debugger and the LED draw their own current and dominate that mea
 see the core figure you'd measure the MCU rail directly (the Curiosity Nano has a cut-strap /
 measurement point for exactly this).
 
+**Why `CONFIG_PM` isn't the answer here (yet).** You might expect to reach that 2 µA Standby
+by enabling Zephyr's power-management subsystem — but in this pinned revision the PL10 has no
+PM support to drive: there is no SoC `pm_state_set()` implementation under
+`zephyr/soc/microchip/pic32c/`, and the devicetree defines no `power-states` for the CPU to
+enter. So `CONFIG_PM=y` would have no low-power states to pick and would gain nothing over the
+plain `WFI` idle you already have. Crucially, **no `CONFIG_PM` ≠ no power saving** — the
+default idle already does `WFI` (the Idle-mode tier); what's missing is the *automatic* drop
+into Standby. Reaching Standby today means implementing it yourself — a `power-states`
+devicetree overlay plus a `pm_state_set()` that writes `SLEEPCFG.SLEEPMODE` (the same
+"bridge it in your own code" pattern as the ADC, only closer to the SoC and trickier, since it
+also involves wake sources and the `SUPC` regulator) — or waiting for upstream PM support to
+land via a [pin update](#updating-the-zephyr-version-moving-the-pin).
+
 ## Memory usage
 
 This board has only 8 KB RAM / 60 KB flash, so usage is worth watching, not just "does it
