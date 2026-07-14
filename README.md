@@ -47,6 +47,7 @@ path short (Windows' ~260-char limit; see [Quick start](#quick-start)).
 - [Bridging a peripheral before Zephyr supports it](#bridging-a-peripheral-before-zephyr-supports-it)
 - [Interrupts and the system tick](#interrupts-and-the-system-tick)
 - [The driver model behind a pin toggle](#the-driver-model-behind-a-pin-toggle)
+- [Idle, WFI, and CPU load](#idle-wfi-and-cpu-load)
 - [Memory usage](#memory-usage)
 - [Known issues](#known-issues)
 - [What is `RUNBOOK.md`?](#what-is-runbookmd)
@@ -726,6 +727,48 @@ two places already discussed:
   beats calling `gpio_pin_toggle` there. For the 500 ms blink it's utterly irrelevant.
 - **Fault post-mortems.** This inline chain is exactly what `tools/faultloc.py` unwinds with
   `addr2line -i` when a fault lands inside one of these folded-together calls.
+
+## Idle, WFI, and CPU load
+
+When no thread is ready to run, Zephyr runs the **idle thread**, which executes a **`WFI`**
+(Wait For Interrupt) — so on this firmware the core is **halted the vast majority of the
+time**. The pattern is always the same: wake on an interrupt → do a few microseconds of work
+(toggle the LED, handle a console character) → go back to `WFI`. For the 500 ms blink that
+means the core is genuinely asleep for ~500 ms at a stretch; the "actually computing" duty
+cycle here is well under 1 %.
+
+**"Halted" is a light sleep, not "off":**
+
+- The core clock is gated (no instructions execute → low power), but the **NVIC, the 24 MHz
+  system-timer counter, and the peripherals keep running** — which is why the next interrupt
+  reliably wakes the core, and why the load measurement below is accurate.
+- It's plain `WFI`. Deeper power states (standby, clock/voltage scaling) would need Zephyr's
+  power-management subsystem, which this minimal build does not enable.
+- This is the *healthy* RTOS state — doing nothing efficiently. A classic superloop with a
+  busy-wait delay would instead spin the CPU at 100 % to achieve the same "nothing," at full
+  power. Tickless (see [Interrupts and the system tick](#interrupts-and-the-system-tick)) is
+  what lets the core stay asleep for hundreds of ms instead of waking 10 000×/s just to tick.
+
+**You can measure CPU load from that idle time.** The load is simply:
+
+> CPU load = 1 − (time in the idle thread ÷ total time)
+
+Enable `CONFIG_THREAD_RUNTIME_STATS` (it pulls in `CONFIG_SCHED_THREAD_USAGE`) and the kernel
+timestamps every context switch, accumulating per-thread execution cycles. Read them with
+`k_thread_runtime_stats_all_get()` — total cycles, plus idle cycles directly when
+`CONFIG_SCHED_THREAD_USAGE_ALL` is set; two reads a second apart give a *rolling* load rather
+than a since-boot average.
+
+The subtlety worth knowing: since the idle time is spent in `WFI`, the measurement only works
+if the counter keeps running while the core sleeps. It does — the runtime stats use the
+24 MHz system-timer counter, which `WFI` doesn't stop, so the sleep time is correctly charged
+to the idle thread. (A cycle counter that halted on `WFI` — some DWT counters do — would lose
+the sleep and report a falsely high load.)
+
+On this firmware that reading would sit **near 0 %** — the threads sleep almost always — which
+matches everything else here: tiny interrupt surface, lots of stack/ISR headroom. A `load`
+console command alongside `threads` would be a natural next diagnostic: same idea, CPU instead
+of stack.
 
 ## Memory usage
 
