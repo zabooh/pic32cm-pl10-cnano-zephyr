@@ -770,6 +770,36 @@ matches everything else here: tiny interrupt surface, lots of stack/ISR headroom
 console command alongside `threads` would be a natural next diagnostic: same idea, CPU instead
 of stack.
 
+### How much power that WFI actually saves
+
+The PL10 datasheet gives current figures at exactly this board's operating point — 24 MHz
+from the internal OSCHF, which is what `WFI` puts into *Idle* sleep mode (3.0 V, typical):
+
+| Mode | Current | What it is here | Source |
+|---|---|---|---|
+| **Active** (`while(1)` loop) | **5.2 mA** | a 100 %-busy superloop | [Table 37-6](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-40CFB883-5F42-451C-89CD-2C397F94A042.html) |
+| **Idle** (`WFI`, CPU stopped, clocks run) | **1.2 mA** | our idle thread | [Table 37-7](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-D4489DC3-1212-49E1-98F8-A8DFAB8A5D61.html) |
+| **Standby** (ULP regulator) | **2.0 µA** | unused (needs Zephyr PM) | [Table 37-8](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-5D2F58F6-00E1-4CE4-8EE2-A58643CF63E7.html) |
+
+The average current is `I = d·5.2 mA + (1 − d)·1.2 mA`, where `d` is the compute duty cycle.
+Since the threads sleep almost always (`d` ≪ 1 %), the firmware sits essentially at the idle
+figure, **~1.2 mA, versus ~5.2 mA if it busy-looped** — roughly **4 mA / ~77 % saved** just
+from letting the idle thread `WFI` instead of spinning. In power terms (~3.3 V board rail):
+about **17 mW → 4 mW**.
+
+The bigger prize is untapped: `WFI` (Idle) only reaches 1.2 mA, but the chip's **Standby**
+mode is **2.0 µA** — another ~600× lower. Getting there needs Zephyr's power-management
+subsystem (`CONFIG_PM`, not enabled in this minimal build) and costs ~120 µs of wake latency
+([Table 37-10](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-2CE6F43E-C56B-435D-8192-75DB547C378B.html))
+instead of waking instantly. For a battery design that's the real lever; `WFI` is just the
+free half of it.
+
+Two honest caveats: these are **MCU-core typicals** with peripherals off, so the real board
+(UART/OSCHF/GPIO active) draws a bit more; and you **can't read them at the USB port** — the
+on-board nEDBG debugger and the LED draw their own current and dominate that measurement. To
+see the core figure you'd measure the MCU rail directly (the Curiosity Nano has a cut-strap /
+measurement point for exactly this).
+
 ## Memory usage
 
 This board has only 8 KB RAM / 60 KB flash, so usage is worth watching, not just "does it
