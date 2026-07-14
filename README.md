@@ -196,8 +196,18 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 
 ### Architecture
 
-The app is split one module per functional domain. No shell subsystem — the command
-console is hand-rolled on `console_getchar()`. `cmd_parser.c` is **feature-agnostic
+**In plain words:** the app in `app/` is a small firmware that blinks an LED and listens
+for typed commands over the serial port. You type a command in a terminal and the board
+acts on it — control the LED (`led`), read the analog input (`adc`), inspect the running
+threads or raw memory (`threads`, `mem`), or reboot (`reset`); **Up/Down** recalls previous
+commands. It's deliberately a real multi-threaded RTOS app — the LED blink, the ADC stream,
+and the console run concurrently, not in one big loop — as a demonstration that Zephyr fits
+comfortably on this 8 KB-RAM chip. The organizing idea is **one small module per job**,
+wired together through a tiny flash-resident command registry instead of Zephyr's
+RAM-heavy shell.
+
+Concretely: the app is split one module per functional domain. No shell subsystem — the
+command console is hand-rolled on `console_getchar()`. `cmd_parser.c` is **feature-agnostic
 infrastructure**: it tokenizes a line and dispatches by looking the command up in a
 flash-resident **command registry**. Each feature module *self-registers* its command with
 one `CMD_REGISTER()` macro (`cmd.h`), so the parser has no dependency on `led_ctrl` /
