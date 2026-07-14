@@ -16,6 +16,29 @@ executable checklist for doing it.
 
 ---
 
+## Preconditions — you need a *reproduced* workspace, not just a clone
+
+The validation steps (1–6) run `git checkout` / `west update` / `west build` **inside**
+`C:\zw\zephyr`, so they assume a **fully reproduced** workspace already exists on this
+machine — i.e. `reproduce-install.ps1` has already been run, so `zephyr/`, `modules/`,
+`.venv/` and the SDK are present. A bare `git clone` of this repo is **not** enough: the
+To-Go repo ships only `app/`, the scripts, and docs — `zephyr/` does not exist until
+reproduced, and there's nothing to `git checkout` in until it does.
+
+Determine the entry point first:
+
+- **A reproduced `C:\zw` already exists here** → normal path; continue to Step 0.
+- **Only a fresh clone (no `zephyr/` yet)** → run `reproduce-install.ps1` **once with the
+  current pin** to get a working workspace, *then* follow this runbook to move it forward.
+  Do **not** shortcut by editing `$ZEPHYR_REV` and reproducing straight to the new commit —
+  that pins a state before you've built and flashed it, exactly what Step 7's golden rule
+  forbids.
+
+Then activate the venv in your shell so `west`/`pyocd` are on `PATH`:
+`& C:\zw\.venv\Scripts\Activate.ps1`.
+
+---
+
 ## Step 0 — Interview the user (do not skip, do not guess)
 
 Ask, and wait for answers, before touching anything:
