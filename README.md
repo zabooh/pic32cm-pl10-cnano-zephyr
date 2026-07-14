@@ -813,6 +813,39 @@ devicetree overlay plus a `pm_state_set()` that writes `SLEEPCFG.SLEEPMODE` (the
 also involves wake sources and the `SUPC` regulator) — or waiting for upstream PM support to
 land via a [pin update](#updating-the-zephyr-version-moving-the-pin).
 
+### How low could it actually go?
+
+The floor is the chip's **Standby** current, ~2 µA. The full ladder at 24 MHz (datasheet
+typicals):
+
+| State | Current | vs. today |
+|---|---|---|
+| Active (busy loop) | 5.2 mA | — |
+| **Idle / WFI (today)** | **1.2 mA** | where you are |
+| **Standby**, everything off (ULP regulator) | **2.0 µA** | ~600× below Idle |
+
+The bare 2 µA assumes *nothing* is running — but then nothing can wake you either. A useful
+"sleep, wake periodically" design adds the quiescent currents of the always-on blocks
+([Table 37-9](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-1D8AF548-A9EA-4FDE-96D4-862F8673CFC7.html)):
+
+| Block | Current | For |
+|---|---|---|
+| Standby base | 2.0 µA | core + SRAM retained |
+| + RTC | 0.5 µA | timed wake-up |
+| + OSC32K | 0.2 µA | 32 kHz clock for the RTC |
+| + BOD (32 Hz sampling) | ~0.6 µA | brown-out protection (optional) |
+
+→ **~2.7 µA** with an RTC wake, **~3.3 µA** if you keep brown-out sampling on. Blocks you
+must leave *off* to get there: analog comparator (25 µA), ADC reference (190 µA), the ADC
+itself (1.7 mA).
+
+So the full span is **5.2 mA → 1.2 mA → ~2–3 µA** — deep Standby is ~400–600× below today's
+`WFI` idle. For perspective, ~3 µA average would run for **years** off a CR2032 (~220 mAh)
+coin cell, versus roughly a **week** at today's 1.2 mA continuous `WFI`. All of this is the
+*silicon* floor, though: it needs the Standby implementation that doesn't exist yet (above),
+the figures are room-temperature typicals, and the Curiosity Nano board itself (debugger, LED)
+draws more — a real µA design needs a board built for it.
+
 ## Memory usage
 
 This board has only 8 KB RAM / 60 KB flash, so usage is worth watching, not just "does it
