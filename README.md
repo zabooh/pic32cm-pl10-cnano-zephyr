@@ -42,6 +42,7 @@ path short (Windows' ~260-char limit; see [Quick start](#quick-start)).
   - [Recommended workflow: source-line debugging](#recommended-workflow-source-line-debugging)
 - [Reproducing this setup elsewhere](#reproducing-this-setup-elsewhere)
 - [Design decisions](#design-decisions)
+- [Updating the Zephyr version](#updating-the-zephyr-version-moving-the-pin)
 - [Memory usage](#memory-usage)
 - [Known issues](#known-issues)
 - [What is `RUNBOOK.md`?](#what-is-runbookmd)
@@ -377,8 +378,45 @@ several GB a default Zephyr installation would use.
 so it needs its own end-to-end test (build + flash + interaction). `west update` only
 ever syncs the four module projects to whatever `zephyr/`'s currently-checked-out
 `west.yml` pins them to — it never touches `zephyr/` itself, which is pinned to one exact
-commit. Full explanation and the 5-step procedure for moving the pin forward: `RUNBOOK.md`
-→ Appendix B.
+commit. How to actually do it safely: [Updating the Zephyr version](#updating-the-zephyr-version-moving-the-pin)
+below; the mechanism behind it: `RUNBOOK.md` → Appendix B.
+
+## Updating the Zephyr version (moving the pin)
+
+This workspace is pinned to one exact Zephyr commit (`$ZEPHYR_REV` in
+`reproduce-install.ps1`) so builds are reproducible and don't break when upstream moves.
+When you *do* want to move forward on purpose — typically to pick up newer PIC32CM PL10
+support Microchip has merged into Zephyr mainline — there's a guided procedure for it:
+**[`RUNBOOK-update-zephyr-pin.md`](RUNBOOK-update-zephyr-pin.md)**.
+
+Why a runbook instead of "just change the hash": editing `$ZEPHYR_REV` alone only affects a
+*fresh* from-scratch reproduction, and it silently skips several things that routinely bite.
+`west update` never touches `zephyr/` itself (so the pin has to be moved by hand); a new
+driver may need a module the `project-filter` currently excludes; a newer Zephyr can demand
+a newer SDK or west; and RAM/flash headroom on this 8 KB part is thin. The runbook walks all
+of that, in order.
+
+It's written as an **agent-driven interview** — the intended way to run it is to let Claude
+Code drive it inside VS Code. Open the workspace and say something like *"update the Zephyr
+pin"* (or *"lese RUNBOOK-update-zephyr-pin.md"*). Claude then:
+
+1. **Asks you for the target commit or tag** (and why) — it won't guess one or silently grab
+   `origin/main`.
+2. **Moves the pin in your live workspace** — `git checkout <commit>` inside `zephyr/`, then
+   `west update`, which pulls the matching `hal_microchip`/module revision bumps.
+3. **Works through the pitfalls** — widening `project-filter` if a new module is needed,
+   bumping the SDK/west if the newer Zephyr requires it, a pristine rebuild, a
+   `ram_report`/`rom_report` headroom check, a flash + serial-console test, and an ISR-stack
+   re-test if the new code adds interrupt sources.
+4. **Persists the pin only after it built and flashed** — writes the new `$ZEPHYR_REV` (plus
+   any SDK/west/filter changes) back into `reproduce-install.ps1`, so the next reproduction
+   matches what was just verified.
+
+**The rule the runbook enforces:** never commit a pin you haven't actually built, flashed,
+and exercised on the board. Two practical notes: you need a *reproduced* workspace to run it
+in — a bare `git clone` has no `zephyr/` yet, so run `reproduce-install.ps1` once first — and
+you can of course follow the steps by hand instead of via Claude; the file reads as a plain
+checklist either way.
 
 ## Memory usage
 
