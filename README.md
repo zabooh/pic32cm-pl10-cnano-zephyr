@@ -46,6 +46,7 @@ path short (Windows' ~260-char limit; see [Quick start](#quick-start)).
 - [Peripheral support status](#peripheral-support-status)
 - [Bridging a peripheral before Zephyr supports it](#bridging-a-peripheral-before-zephyr-supports-it)
 - [Interrupts and the system tick](#interrupts-and-the-system-tick)
+- [The driver model behind a pin toggle](#the-driver-model-behind-a-pin-toggle)
 - [Memory usage](#memory-usage)
 - [Known issues](#known-issues)
 - [What is `RUNBOOK.md`?](#what-is-runbookmd)
@@ -681,6 +682,50 @@ lets the core stay in `WFI` idle between events.
 (ms), applied to all preemptible threads (`CONFIG_TIMESLICE_PRIORITY = 0`). All three app
 threads run at priority 7, so they time-slice against each other every 20 ms — but since
 each does a little work and then `k_sleep`s, none ever burns a full 20 ms slice in practice.
+
+## The driver model behind a pin toggle
+
+A one-liner like `gpio_pin_toggle_dt(&led)` looks trivial, but it fans out through several
+layers of Zephyr's **driver model** before a register is written. Traced in this build:
+
+```
+gpio_pin_toggle_dt(spec)                inline   — takes spec->port, spec->pin (from devicetree)
+  └─ gpio_pin_toggle(port, pin)         inline
+      └─ z_impl_gpio_port_toggle_bits   inline   — BIT(pin)
+          └─ api->port_toggle_bits(...)  ← indirect call through the driver's API table
+              └─ gpio_mchp_port_toggle_bits          (the PORT driver)
+                  └─ regs->PORT_OUTTGL = pins;       ← the actual register write
+```
+
+**Most of that collapses.** The `_dt` / `pin_toggle` / `z_impl_*` wrappers are all
+`static inline` and fold together at `-Os`. What remains is **one** real runtime
+indirection: `api->port_toggle_bits`, a call through a **function pointer** in the driver's
+API struct (`.port_toggle_bits = gpio_mchp_port_toggle_bits`). The compiler can't inline
+past it, because it doesn't know at build time which driver sits behind the `struct device`.
+That pointer table is how Zephyr does polymorphism in C — effectively a vtable — and it is
+what makes drivers pluggable.
+
+Why the layering earns its keep:
+
+- **Portability** — `gpio_pin_toggle_dt()` is identical on every board; the SoC-specific
+  register poke hides behind the function pointer. Change the board, the app code doesn't.
+- **Devicetree binding** — the `_dt` variants resolve the device and pin at compile time
+  (`spec->port` / `spec->pin` are constants).
+- **`__syscall`** — `gpio_pin_toggle` is a syscall, so the same call can trap into the
+  kernel under userspace (MPU) protection. This board has **no userspace** (no MPU on the
+  M0+), so it compiles straight through to `z_impl_*` at zero extra cost; enabling userspace
+  would add exactly one more layer (the syscall trap).
+
+Net cost: a little argument setup, one indirect branch, and the (inlined) register write —
+tiny. But it isn't the single `str` a direct register access would be, and that shows up in
+two places already discussed:
+
+- **Hot loops.** Toggling in a tight loop (say a 1 kHz square wave) pays this dispatch every
+  iteration — one more reason a hardware **PWM/TC** (see
+  [Peripheral support status](#peripheral-support-status)) or a direct `PORT_OUTTGL = mask`
+  beats calling `gpio_pin_toggle` there. For the 500 ms blink it's utterly irrelevant.
+- **Fault post-mortems.** This inline chain is exactly what `tools/faultloc.py` unwinds with
+  `addr2line -i` when a fault lands inside one of these folded-together calls.
 
 ## Memory usage
 
