@@ -116,8 +116,9 @@ behind a public interface that reveals nothing about how it's implemented.
    ADC-capable pin this board breaks out) were each confirmed against *three* sources that
    agree: the datasheet (DS40002667A §11.6.8, §33.4.2.5), a bare-metal CMSIS reference, and
    Microchip's official Harmony reference app for this exact board
-   (`csp_apps_pic32cm_pl10` v1.0.0). Register-poking has no compiler to catch a wrong bit —
-   the cross-check is the safety net.
+   (`csp_apps_pic32cm_pl10` v1.0.0 — catalogued in
+   [`HARMONY-EXAMPLES.md`](HARMONY-EXAMPLES.md)). Register-poking has no compiler to catch a
+   wrong bit — the cross-check is the safety net.
 4. **Never clobber what Zephyr already owns.** The clock bit is set with `|=`, not a plain
    assignment, so it doesn't wipe bits Zephyr's own `clock_control` driver set for other
    peripherals in the same register; the pin-mux write masks a single nibble so it leaves
@@ -583,6 +584,11 @@ in-place with SRAM retained, it behaves like **suspend-to-RAM that the CPU never
 there is no checkpoint to save and no state to reconstruct. The real work of a PL10 Standby port
 is therefore *choosing and arming wake sources* and *re-syncing the kernel tick* for the elapsed
 sleep time — not rebuilding application state on the far side of a reset.
+
+Microchip's own bare-metal blueprints for exactly this are the `ac_sleepwalk`,
+`adc_window_sleepwalking` / `adc_dmac_sleepwalking`, and `pm_wakeup_eic` / `pm_wakeup_rtc`
+examples — they show `SLEEPCFG = STANDBY` + a `RUNSTDBY` peripheral waking the core, at the
+register level. See [`HARMONY-EXAMPLES.md`](HARMONY-EXAMPLES.md) for the full catalogue.
 
 ## PIC32CM PL10 device series
 

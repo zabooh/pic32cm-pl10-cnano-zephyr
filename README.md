@@ -196,6 +196,7 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 | `.vscode/` | Build/flash tasks, debug configs, and IntelliSense settings for working in VS Code (see below) |
 | `RUNBOOK.md` | Step-by-step build log with rationale, troubleshooting table, and lessons learned |
 | `DEEPDIVE.md` | Longer *how it works* essays (drivers, interrupts, power, peripheral support, porting) kept out of this README |
+| `HARMONY-EXAMPLES.md` | Catalogue of Microchip's bare-metal Harmony 3 example apps for the PL10 family (26 examples by topic) — the register-level reference used to cross-check the bridging pattern |
 
 ### Hardware
 
