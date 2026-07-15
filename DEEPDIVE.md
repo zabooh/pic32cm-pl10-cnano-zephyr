@@ -15,6 +15,7 @@ quirks), see [`RUNBOOK.md`](RUNBOOK.md).
 - [Interrupts and the system tick](#interrupts-and-the-system-tick)
 - [The driver model behind a pin toggle](#the-driver-model-behind-a-pin-toggle)
 - [Idle, WFI, and CPU load](#idle-wfi-and-cpu-load)
+- [Sleep modes, wake-up latency, and keeping state across a sleep](#sleep-modes-wake-up-latency-and-keeping-state-across-a-sleep)
 - [PIC32CM PL10 device series](#pic32cm-pl10-device-series)
 - [Porting to another PL10 device](#porting-to-another-pl10-device)
 
@@ -455,6 +456,133 @@ erasing most of the Standby benefit. Getting both the button *and* µA sleep wou
 the EIC, which the PL10 lacks in this Zephyr (see
 [Peripheral support status](#peripheral-support-status)), which is exactly why `button.c`
 polls instead.
+
+## Sleep modes, wake-up latency, and keeping state across a sleep
+
+A natural worry with deep sleep is: *if the chip powers most of itself down, does it have to
+come back up through reset → C-runtime init → driver init → start the scheduler before it can
+serve the application again — and is RAM gone, so I'd have to reconstruct the last state?*
+For the PL10 the answer is reassuring, and it comes straight from the datasheet
+(DS40002667): **the deepest sleep this silicon offers neither clears RAM nor resets the
+CPU.** So most of that worry doesn't apply — but the parts of it that *do* apply (a genuine
+reset, or a true power loss) are worth knowing exactly, so this section covers both.
+
+### There are only two sleep modes, and both retain everything
+
+`SLEEPCFG.SLEEPMODE` ([§14.6.1](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-73DF2464-590C-4D1A-BFA5-35334AE17955.html))
+accepts exactly two values — `IDLE` (0x2) and `STANDBY` (0x4); every other code is
+*reserved*. There is **no** "Off"/"Backup"/deep-sleep tier that wipes SRAM the way some other
+low-power families have. You enter either mode by writing the field and executing `WFI`.
+
+Both modes **retain the SRAM contents and the full logic state**
+([§14.4.2.2](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-8C82C204-8FFA-4A79-8561-3DA739A87929.html)),
+and waking from either **resumes program execution at the instruction after the `WFI`** —
+the CPU takes the pending interrupt (or just runs on, depending on `PRIMASK`), it does *not*
+vector to reset. Nothing re-runs: the Zephyr scheduler, every thread's stack, kernel timers,
+and driver state are all exactly as they were the moment you slept.
+
+| | Idle ([§14.4.4.1](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-726A8734-5E3E-47A9-B902-6537A1683408.html)) | Standby ([§14.4.4.2](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-9F979F28-27F5-4563-A353-B4CAB4DE3DCB.html)) |
+|---|---|---|
+| CPU | stopped | stopped |
+| Clocks / peripherals | GCLK0 + MCLK stay live; AHB/APB gated unless a peripheral requests them | all stopped unless a peripheral keeps its own clock alive (**SleepWalking**) |
+| SRAM + logic state | **retained** | **retained** (optionally *back-biased* for lower leakage — a retained-but-not-freely-accessible state; e.g. the DMAC can't reach back-biased RAM, [§19.4.4](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-E75FDBBE-4747-4F9C-BE62-A4D1AE4C5B4C.html)) |
+| Regulator | main | ULP (or main — see the wake trade-off) |
+| Typical current @ 24 MHz | **1.2 mA** ([Table 37-7](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-D4489DC3-1212-49E1-98F8-A8DFAB8A5D61.html)) | **2.0 µA** ([Table 37-8](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-5D2F58F6-00E1-4CE4-8EE2-A58643CF63E7.html)) |
+| Wake-up latency | fastest (a few cycles) — GCLK0/MCLK never stopped | **24–120 µs** ([Table 37-10](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-2CE6F43E-C56B-435D-8192-75DB547C378B.html)) |
+| On wake | resume after `WFI` | resume after `WFI` |
+
+So "how fast can I serve the app again after deep sleep?" is **not** a reboot-time question on
+this part — it's a wake-up-latency question, measured in microseconds, with RAM already intact.
+
+### Wake-up latency, and the one knob that trades current for speed
+
+The Idle tier keeps GCLK0 + MCLK running, so its wake is essentially immediate (the datasheet
+calls it "the fastest wake-up time") — but it only buys you the 1.2 mA tier. Standby is where
+the µA numbers live, and its wake latency has a single, explicit knob:
+**`SUPC.VREG.RUNSTDBY`** ([Table 37-10](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-2CE6F43E-C56B-435D-8192-75DB547C378B.html)):
+
+| `SUPC.VREG.RUNSTDBY` | Standby current | Wake from Standby |
+|---|---|---|
+| **0** — ULP regulator (default low-power) | **2.0 µA** | **120 µs** |
+| **1** — main regulator kept powered in Standby | **190 µA** | **24 µs** |
+
+That's the whole trade: keeping the main regulator alive through Standby costs ~188 µA extra
+but cuts the wake latency ~5× (120 µs → 24 µs). For something that wakes rarely and can
+tolerate a tenth of a millisecond, leave it at the 2 µA default; for something that wakes
+often and must respond fast, `RUNSTDBY = 1` is the lever — you spend standby current to buy
+responsiveness. (The 24/120 µs figures already include regulator settling; a clock source left
+*on-demand* restarts within that window when the CPU or a peripheral requests it, so you don't
+pay a separate OSCHF-restart on top.)
+
+Two practical notes when you actually program this: there is a bus-bridge latency between the
+store to `SLEEPCFG` and it taking effect, so **read the register back and confirm it holds the
+intended value before `WFI`** ([§14.6.1](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-73DF2464-590C-4D1A-BFA5-35334AE17955.html)).
+And a Standby design needs a wake source that stays alive in Standby — typically the **RTC**
+(it keeps counting and can wake on a period) or a **pin edge via the EIC**; note the EIC has no
+Zephyr node in this revision (see [Peripheral support status](#peripheral-support-status)),
+which is the same reason the SW0 button polls today.
+
+### Why you should sleep, not reset — the µs-vs-ms gap
+
+The only thing on the PL10 that *does* run the full reset → startup → scheduler sequence is an
+actual **reset**. It's worth seeing how much slower that path is, because it's exactly the path
+Standby lets you avoid:
+
+- **Standby wake:** 24–120 µs, then the next instruction runs. No re-init of anything.
+- **A real reset:** the Boot ROM first brings OSCHF up at only **4 MHz** (OSCHF ÷ 6) and
+  disables every other clock generator and the 32 K sources
+  ([§9.3](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-67C2EA12-0FB2-4A90-8DEE-EE83C39180C2.html)),
+  then Zephyr's startup re-runs the clock tree up to 24 MHz, the C runtime (`.data`/`.bss`),
+  every driver's init, and finally creates the threads and starts the scheduler — **milliseconds**,
+  from scratch.
+
+That's a ~1000× difference. The takeaway for a low-power PL10 design is blunt: **to save power
+you sleep in Standby; you never reset to save power.** Standby already gives you both the µA
+floor *and* an in-place, RAM-intact resume — there is nothing faster to "reconstruct," because
+nothing was torn down.
+
+### When RAM really *is* gone: a true reset or power loss
+
+RAM is only lost when the device actually resets or loses VDD — POR, brown-out (BODVDD), an
+external `RESET`, a Watchdog reset, or a `SYSRESETREQ`/lockup. There is **no separate
+always-powered backup-SRAM domain** on the PL10 (consistent with there being no Backup sleep
+mode) — all SRAM is volatile and shares the fate of VDD. On the PL10, note that **all "user"
+reset sources are treated like power resets**
+([§4.6](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-6FB0EBA8-AACE-4E92-8900-4AEEBE02D34A.html)),
+so don't assume a soft or Watchdog reset preserves more than a POR would.
+
+If you genuinely need to survive one of those and reconstruct the last state, the two
+mechanisms are:
+
+1. **Read `RCAUSE` at the top of boot** to learn *why* you reset (POR / BODVDD / EXT / WDT /
+   SYST / LOCKUP) and branch to a warm-start path
+   ([§16.6.2](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-95B12DCB-8F8C-4F2D-94F3-846150B30031.html),
+   [§16.4.2.2](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-DBF54462-8F0A-4176-A1D3-AACE383AB29D.html)).
+2. **Checkpoint the state you care about into Flash (NVM)** before the risky window and reload
+   it on boot. Mind the flash-corruption rules: don't start a Flash write when VDD is near the
+   brown-out threshold, and use the BOD to hold the device in reset below it
+   ([§26.4.2.4](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-58142CF0-442E-438E-BB1E-18A39E7C1DD4.html)).
+
+For timekeeping specifically, the **RTC keeps counting through Standby** (and can be the wake
+source), so wall-clock time is preserved across sleep for free; across a true power loss it
+needs a backup supply.
+
+### What this means for a Zephyr PM port
+
+Today there's no PL10 PM port (see [Idle, WFI, and CPU load](#idle-wfi-and-cpu-load)), so
+Zephyr's idle only ever executes a plain `WFI` in the **Idle** tier — it never programs
+`SLEEPCFG = STANDBY`. That already gives you RAM-intact, near-instant resume trivially; it just
+sits at 1.2 mA instead of 2 µA.
+
+Reaching Standby is the same "bridge it in your own code" pattern as the ADC
+([Bridging a peripheral…](#bridging-a-peripheral-before-zephyr-supports-it)), only closer to the
+SoC: arm a wake source (RTC period, or an EIC pin once that lands), set `SUPC.VREG.RUNSTDBY`
+for your latency/current target, write `SLEEPCFG.SLEEPMODE = STANDBY`, read it back, then `WFI`.
+The encouraging part for such a port is exactly the finding above: because Standby resumes
+in-place with SRAM retained, it behaves like **suspend-to-RAM that the CPU never notices** —
+there is no checkpoint to save and no state to reconstruct. The real work of a PL10 Standby port
+is therefore *choosing and arming wake sources* and *re-syncing the kernel tick* for the elapsed
+sleep time — not rebuilding application state on the far side of a reset.
 
 ## PIC32CM PL10 device series
 

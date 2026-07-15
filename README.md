@@ -563,6 +563,10 @@ stays about getting the board running. What's in there:
 - **[Idle, WFI, and CPU load](DEEPDIVE.md#idle-wfi-and-cpu-load)** — why the core sleeps
   ~99 % of the time, how to measure CPU load, the ~1.2 mA WFI vs. ~2 µA Standby power
   ladder, and why a Zephyr PM/Standby port is the key missing piece.
+- **[Sleep modes, wake-up latency, and keeping state across a sleep](DEEPDIVE.md#sleep-modes-wake-up-latency-and-keeping-state-across-a-sleep)**
+  — the PL10 has only Idle + Standby (no RAM-wiping deep sleep); both retain SRAM and resume
+  after `WFI` without a reset, so wake is 24–120 µs, not a reboot. Plus the current-vs-latency
+  knob, and how to survive a true reset/power loss (`RCAUSE` + Flash).
 - **[PIC32CM PL10 device series](DEEPDIVE.md#pic32cm-pl10-device-series)** — the wider
   family (3204/6408/1216), package options, and full orderable part numbers.
 - **[Porting to another PL10 device](DEEPDIVE.md#porting-to-another-pl10-device)** — effort
