@@ -55,13 +55,17 @@ serial command line — built to answer one question: **can Zephyr RTOS run comf
 an 8 KB-RAM microcontroller**, or does it need a beefier part to be worth using?
 
 - Interactive serial commands: `led on/off/toggle/blink <ms>`, `adc read`,
-  `adc stream start/stop`, `button` (read the SW0 user button), `reset`,
+  `adc stream start/stop`, `button` (read the SW0 user button), `load on/off` (hold the CPU
+  busy to make the idle-vs-active current draw visible on a meter),
+  `standby <s>` (drop the SoC into PM Standby at ~2 µA and wake it after `<s>` seconds via
+  the RTC — the PL10's headline low-power mode, driven directly since Zephyr has no PM port
+  for this part yet), `reset`,
   `threads` (live per-thread stack usage), `mem <addr>` (raw hex dump), `help` — with a
   hand-rolled line editor featuring bash-style Up/Down command history, and a boot banner
   stamped with the build time
-- Genuinely multi-threaded: six threads (LED blink, ADC stream, command console, button
-  watcher, plus the kernel's main/idle) — a real RTOS app, not a superloop; a `threads`
-  command shows each one's live stack high-water mark
+- Genuinely multi-threaded: seven threads (LED blink, ADC stream, command console, button
+  watcher, an on-demand CPU-load generator, plus the kernel's main/idle) — a real RTOS app,
+  not a superloop; a `threads` command shows each one's live stack high-water mark
 - Fully reproducible setup: one script rebuilds the whole toolchain (Zephyr, HAL
   modules, SDK, Python deps) from scratch on any Windows machine, pinned to exact
   versions
@@ -69,8 +73,8 @@ an 8 KB-RAM microcontroller**, or does it need a beefier part to be worth using?
   (not the dozens of unrelated HALs/subsystems a default `west update` would pull in),
   keeping the whole installation **under 2 GB** instead of several GB
 - VS Code integration: build/flash tasks, source-line debugging, IntelliSense
-- Only **64% RAM / 31% flash** used of this board's 8 KB RAM / 60 KB flash — still
-  ~36% of RAM free with all of the above running (thread introspection included)
+- Only **70% RAM / 32% flash** used of this board's 8 KB RAM / 60 KB flash — still
+  ~30% of RAM free with all of the above running (thread introspection included)
 
 Where to go from here:
 - Just want to build and flash it? → [Quick start](#quick-start)
@@ -84,9 +88,9 @@ Where to go from here:
 - Zephyr RTOS runs comfortably on the PIC32CM PL10's 8 KB RAM — contrary to the common
   assumption that it needs a bigger part.
 - A real multi-threaded interactive app (LED blink + ADC streaming + a command console
-  with history + a button watcher + thread introspection, six threads total) still leaves
-  **~36% of RAM free** — 5,232 B used of 8 KB. A bare blinky started far lower (2,744 B / 33.50%; see
-  [Memory usage](#memory-usage)).
+  with history + a button watcher + a CPU-load generator + thread introspection, seven threads
+  total) still leaves **~30% of RAM free** — 5,744 B used of 8 KB. A bare blinky started far
+  lower (2,744 B / 33.50%; see [Memory usage](#memory-usage)).
 - The entire toolchain — Zephyr revision, HAL modules, SDK, Python packages — is
   version-pinned and reproducible with one script on a fresh Windows machine.
 - Source-line debugging works reliably in VS Code once a couple of Windows-specific
@@ -173,6 +177,9 @@ pl10:~$ button
 button: released
 pl10:~$ button: pressed      <-- printed on its own when you press SW0
 button: released
+pl10:~$ standby 5
+standby: entering Standby (~2 uA), RTC wake in 5 s...
+standby: woke after 5 s (RTC compare match)   <-- 5 s later, RTC pulls it out
 pl10:~$ reset
 ```
 
@@ -185,7 +192,7 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 
 | Path | Purpose |
 |---|---|
-| `app/` | The application: `CMakeLists.txt`, `prj.conf`, `app.overlay` (SW0 user-button devicetree node), `cmd_sections.ld` (command-registry linker section), and `src/` split one module per domain — `main.c` (startup wiring), `led_ctrl.c` (LED + blink thread + `led` command), `pl10_adc.c` (ADC driver + stream thread + `adc` command), `button.c` (SW0 read + press-notifier thread + `button` command), `cmd_parser.c` (console infrastructure: line editor, history, registry dispatch), `cmd.h` (command-registry interface), `diag.c` (`reset`/`threads`/`mem` commands), `fault.c` (fatal-error handler), `app_threads.h` (central thread stack/priority budgets) |
+| `app/` | The application: `CMakeLists.txt`, `prj.conf`, `app.overlay` (SW0 user-button node + `led0` active-low polarity fix), `cmd_sections.ld` (command-registry linker section), and `src/` split one module per domain — `main.c` (startup wiring), `led_ctrl.c` (LED + blink thread + `led` command), `pl10_adc.c` (ADC driver + stream thread + `adc` command), `button.c` (SW0 read + press-notifier thread + `button` command), `cmd_parser.c` (console infrastructure: line editor, history, registry dispatch), `cmd.h` (command-registry interface), `diag.c` (`reset`/`threads`/`mem` commands), `load.c` (CPU-load generator + `load` command), `standby.c` (RTC-wake PM Standby + `standby` command), `fault.c` (fatal-error handler), `app_threads.h` (central thread stack/priority budgets) |
 | `zephyr/` | Zephyr RTOS source (shallow clone, pinned revision) |
 | `modules/` | Only the HAL/library modules actually needed: `hal_microchip`, `cmsis`, `cmsis_6`, `picolibc` |
 | `build/` | CMake/Ninja build output; `build/zephyr/zephyr.hex` is the flashable artifact |
@@ -226,7 +233,7 @@ one `CMD_REGISTER()` macro (`cmd.h`), so the parser has no dependency on `led_ct
 `pl10_adc` / `diag` and adding a command touches only its owning module.
 
 ```
-  app/src/  (6 threads: main + idle + blink_tid + adc_stream_tid + cmd_tid + button_tid)
+  app/src/  (7 threads: main + idle + blink_tid + adc_stream_tid + cmd_tid + button_tid + load_tid)
 
   +-------------------------------+
   | cmd_parser.c   (cmd_tid)      |  feature-agnostic console:
@@ -264,12 +271,13 @@ one `CMD_REGISTER()` macro (`cmd.h`), so the parser has no dependency on `led_ct
   main.c: startup wiring only (led_ctrl_init + default blink).
 ```
 
-**Footprint on the PL10** (8 KB RAM / 60 KB flash): about **5.1 KB RAM (~64 %)** and
-**19 KB flash (~31 %)** — RAM is the tight resource, flash is roomy (two-thirds free).
-Most of the RAM is the four app threads (each: its stack — 640 B console, 384 B button,
-352 B blink, 352 B ADC — plus a ~120 B control block); dropping the Zephyr shell in favor of
-the hand-rolled parser is a big part of why a genuinely multi-threaded app still leaves ~36 %
-of RAM free. Full per-symbol breakdown: [Memory usage](#memory-usage).
+**Footprint on the PL10** (8 KB RAM / 60 KB flash): about **5.6 KB RAM (~70 %)** and
+**19 KB flash (~32 %)** — RAM is the tight resource, flash is roomy (two-thirds free).
+Most of the RAM is the five app threads (each: its stack — 640 B console, 384 B button,
+352 B blink, 352 B ADC, 320 B load generator — plus a ~120 B control block); dropping the
+Zephyr shell in favor of the hand-rolled parser is a big part of why a genuinely
+multi-threaded app still leaves ~30 % of RAM free. Full per-symbol breakdown:
+[Memory usage](#memory-usage).
 
 ## Working in VS Code
 
@@ -451,20 +459,20 @@ checklist either way.
 
 This board has only 8 KB RAM / 60 KB flash, so usage is worth watching, not just "does it
 fit." Current build (LED blink + ADC + command console with history + a button watcher +
-thread introspection, six threads):
+a CPU-load generator + thread introspection, seven threads):
 
 | | Used | Capacity | % used |
 |---|---|---|---|
-| RAM | 5,232 B | 8,192 B | **63.87%** |
-| Flash | 19,128 B | 61,440 B | **31.13%** |
+| RAM | 5,744 B | 8,192 B | **70.12%** |
+| Flash | 19,840 B | 61,440 B | **32.29%** |
 
 Check live numbers with `west build -d C:\zw\build -t ram_report` / `-t rom_report`
 (per-symbol breakdown) — or, on the running board, the **`threads`** console command,
 which prints each thread's live stack high-water mark.
 
-Most of the RAM is the four application threads — each `k_thread` costs its stack (352 B
-blink, 352 B ADC stream, 640 B console, 384 B button) plus a 120 B thread control block, all
-directly visible in `ram_report`. Those stack sizes live in one place (`app_threads.h`) and were
+Most of the RAM is the five application threads — each `k_thread` costs its stack (352 B
+blink, 352 B ADC stream, 640 B console, 384 B button, 320 B CPU-load generator) plus a 120 B
+thread control block, all directly visible in `ram_report`. Those stack sizes live in one place (`app_threads.h`) and were
 set with headroom over the measured high-water marks — the `threads` command flagged the
 first cut (256/320 B) as running at 100%/97%, so they were bumped. As a runtime safety
 net, `CONFIG_STACK_SENTINEL` is enabled (this MPU-less Cortex-M0+ can't use hardware stack

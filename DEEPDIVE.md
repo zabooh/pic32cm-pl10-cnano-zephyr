@@ -355,9 +355,14 @@ to the idle thread. (A cycle counter that halted on `WFI` — some DWT counters 
 the sleep and report a falsely high load.)
 
 On this firmware that reading would sit **near 0 %** — the threads sleep almost always — which
-matches everything else here: tiny interrupt surface, lots of stack/ISR headroom. A `load`
-console command alongside `threads` would be a natural next diagnostic: same idea, CPU instead
-of stack.
+matches everything else here: tiny interrupt surface, lots of stack/ISR headroom. The
+**`load` console command** ([`load.c`](app/src/load.c)) is the deliberate opposite: `load on`
+runs a low-priority arithmetic loop that never sleeps, so the idle thread's `WFI` never runs
+and the core stays active — which is exactly how you make the ~1.2 mA-idle vs. ~5.2 mA-active
+gap (above) visible on a current meter. It runs *below* the app threads, so the console stays
+responsive and `load off` blocks it again, dropping the reading back to ~0 %. (At the USB port
+the nEDBG debugger + LED dominate the absolute current, but the ~4 mA *delta* from `load
+on`/`off` still shows in mA resolution.)
 
 ### How much power that WFI actually saves
 
@@ -368,7 +373,7 @@ from the internal OSCHF, which is what `WFI` puts into *Idle* sleep mode (3.0 V,
 |---|---|---|---|
 | **Active** (`while(1)` loop) | **5.2 mA** | a 100 %-busy superloop | [Table 37-6](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-40CFB883-5F42-451C-89CD-2C397F94A042.html) |
 | **Idle** (`WFI`, CPU stopped, clocks run) | **1.2 mA** | our idle thread | [Table 37-7](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-D4489DC3-1212-49E1-98F8-A8DFAB8A5D61.html) |
-| **Standby** (ULP regulator) | **2.0 µA** | unused (needs Zephyr PM) | [Table 37-8](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-5D2F58F6-00E1-4CE4-8EE2-A58643CF63E7.html) |
+| **Standby** (ULP regulator) | **2.0 µA** | reached on demand by the `standby` command (direct-register RTC-wake bridge; see below) | [Table 37-8](https://onlinedocs.microchip.com/oxy/GUID-DE09DA5A-1CBB-49A8-9DA0-B2EB94E57E56-en-US-11/GUID-5D2F58F6-00E1-4CE4-8EE2-A58643CF63E7.html) |
 
 The average current is `I = d·5.2 mA + (1 − d)·1.2 mA`, where `d` is the compute duty cycle.
 Since the threads sleep almost always (`d` ≪ 1 %), the firmware sits essentially at the idle
@@ -402,12 +407,27 @@ devicetree overlay plus a `pm_state_set()` that writes `SLEEPCFG.SLEEPMODE` (the
 also involves wake sources and the `SUPC` regulator) — or waiting for upstream PM support to
 land via a [pin update](README.md#updating-the-zephyr-version-moving-the-pin).
 
+**This repo now does exactly that half of it, on demand.** The `standby <s>` command
+([app/src/standby.c](app/src/standby.c)) writes `PM.SLEEPCFG = STANDBY` + `__WFI()` and arms
+the **RTC** (OSC1K, 1.024 kHz) for a one-shot compare-match wake `<s>` seconds later — so you
+can drop the board to the ~2 µA Standby floor and bring it back with a real async wake source,
+today, without `CONFIG_PM`. It's modelled on Microchip's Harmony `pm/pm_wakeup_rtc` reference
+and cross-checked against the datasheet. What it is *not* is the *automatic*, policy-driven
+version: it's a manual command, not a `pm_state_set()` the idle loop calls on its own, and it
+doesn't yet do **SleepWalking** (peripherals running autonomously in Standby, waking the core
+only on an event). It also stops SysTick across the sleep, so the kernel clock lags by `<s>`
+seconds afterwards — a real PM port (tickless idle + `sys_clock_announce()`) is what closes
+that gap. So the manual Standby floor is now reachable and demonstrable; the autonomous,
+integrated form is still the missing upstream piece.
+
 **Why this is the gap to watch.** Ultra-low-power is the PL10's headline strength: the whole
 reason to pick this part for battery-powered, energy-harvesting, loop-powered, or
 wake-on-event designs is its **~2 µA Standby mode with SleepWalking** — autonomous peripherals
 (RTC, touch, ADC via the event system) that keep running and wake the core only on a real
-event, no CPU in between. Under Zephyr today **none of that is reachable**: the best the stock
-idle gives is the ~1.2 mA Idle tier, roughly **600× above** the part's advertised floor. So for
+event, no CPU in between. Under Zephyr today the stock idle only reaches the ~1.2 mA Idle tier,
+roughly **600× above** the part's advertised floor; the `standby` command now hits the ~2 µA
+floor on demand with an RTC wake, but the **autonomous SleepWalking** form — peripherals
+running and waking the core with no CPU in between — is still out of reach. So for
 exactly the class of applications the PL10 is usually chosen for, a proper **Zephyr
 power-management port — Standby plus SleepWalking wake sources — is arguably the single most
 valuable piece of upstream support still missing**, more so than any individual peripheral
@@ -584,6 +604,20 @@ in-place with SRAM retained, it behaves like **suspend-to-RAM that the CPU never
 there is no checkpoint to save and no state to reconstruct. The real work of a PL10 Standby port
 is therefore *choosing and arming wake sources* and *re-syncing the kernel tick* for the elapsed
 sleep time — not rebuilding application state on the far side of a reset.
+
+The `standby <s>` command ([app/src/standby.c](app/src/standby.c)) already walks this exact
+sequence — arm the RTC (OSC1K) for a one-shot compare match, write `SLEEPCFG.SLEEPMODE = STANDBY`,
+read it back, `WFI` — as an on-demand command, and it **measurably reaches the floor**: with the
+clock tree quiesced it pulls the whole board down to the *same current as holding the MCU in
+nRESET* (target mA-scale draw eliminated). Getting there was the instructive part — `SLEEPCFG`+`WFI`
+alone changed nothing, because the board devicetree runs **GCLK0 with `RUNSTDBY = 1`** (so it, and
+OSCHF, kept spinning in Standby unconditionally) and **OSCHF has no RUNSTDBY bit** (with
+`ONDEMAND = 0` it free-ran regardless). The command therefore also, for the duration of the sleep:
+clears `GCLK0.RUNSTDBY`, sets `OSCHF.ONDEMAND = 1`, and drops the console SERCOM's APB + core-GCLK
+requests — only then does OSCHF actually stop. What it still *doesn't* do is the **kernel-tick
+re-sync**: it stops SysTick across the sleep and leaves the tick behind by `<s>` seconds — fine for
+a manual demo, but precisely the part a real, always-on PM port must get right (tickless idle +
+`sys_clock_announce()`), along with an automatic policy and SleepWalking.
 
 Microchip's own bare-metal blueprints for exactly this are the `ac_sleepwalk`,
 `adc_window_sleepwalking` / `adc_dmac_sleepwalking`, and `pm_wakeup_eic` / `pm_wakeup_rtc`

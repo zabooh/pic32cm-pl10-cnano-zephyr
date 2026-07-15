@@ -32,4 +32,15 @@
 #define BUTTON_THREAD_STACK_SIZE      384
 #define BUTTON_THREAD_PRIORITY        7
 
+/*
+ * The CPU-load generator (load.c, the "load" command). Priority is one *below*
+ * the app threads above so it only burns time that would otherwise be idle:
+ * the console/blink/ADC/button threads (priority 7) always preempt it, so they
+ * stay responsive while the core is held busy. Its stack is tiny - the thread
+ * only runs an arithmetic loop and a semaphore take, no printf/driver calls -
+ * but re-check with the "threads" command after any change.
+ */
+#define LOAD_THREAD_STACK_SIZE        320
+#define LOAD_THREAD_PRIORITY          8
+
 #endif /* APP_THREADS_H_ */

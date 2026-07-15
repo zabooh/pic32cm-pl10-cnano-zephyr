@@ -27,3 +27,17 @@
 		sw0 = &sw0;
 	};
 };
+
+/*
+ * Fix the LED0 polarity. The board devicetree declares led0 as GPIO_ACTIVE_HIGH,
+ * but the on-board LED is wired active-low - the User Guide (section 4.1 "LED")
+ * states "Driving the connected I/O line to GND will activate the LED". With the
+ * wrong flag every led_ctrl_*() call is inverted (`led on` drives the pin high =
+ * LED off), and - importantly for power - `led_ctrl_off()` drove the pin LOW,
+ * turning the LED physically ON and sinking ~1 mA through it during `standby`.
+ * Overriding the flag here (rather than editing the pinned board file) makes
+ * on/off correct and lets the LED actually go dark in Standby.
+ */
+&led0 {
+	gpios = <&portb 2 GPIO_ACTIVE_LOW>;
+};
