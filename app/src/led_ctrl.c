@@ -14,6 +14,12 @@ static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 /* Blink interval in ms; 0 = no automatic blinking */
 static volatile uint32_t blink_ms;
 
+/* Live toggle counter: increments on every completed blink. A "liveness beacon"
+ * for the blink thread - if it keeps climbing, the thread is running and its
+ * k_sleep timing works. Handy to confirm the kernel clock survived a Standby nap
+ * (query with "led count" before/after: it must resume climbing on wake). */
+static volatile uint32_t blink_count;
+
 static void blink_thread_entry(void *p1, void *p2, void *p3)
 {
     while (1) {
@@ -29,6 +35,7 @@ static void blink_thread_entry(void *p1, void *p2, void *p3)
          * blink_ms and start over instead of toggling on stale settings. */
         if (k_sleep(K_MSEC(ms)) == 0) {
             gpio_pin_toggle_dt(&led);
+            blink_count++;
         }
     }
 }
@@ -85,8 +92,10 @@ static void led_cmd(int argc, char **argv)
         uint32_t ms = (uint32_t)strtoul(argv[2], NULL, 10);
         led_ctrl_blink(ms);
         printk("led blink %u ms\n", ms);
+    } else if (argc == 2 && strcmp(argv[1], "count") == 0) {
+        printk("led toggles: %u\n", blink_count);
     } else {
-        printk("usage: led on|off|toggle|blink <ms>\n");
+        printk("usage: led on|off|toggle|blink <ms>|count\n");
     }
 }
-CMD_REGISTER(led, "led", led_cmd, "led on|off|toggle|blink <ms>  - LED control");
+CMD_REGISTER(led, "led", led_cmd, "led on|off|toggle|blink <ms>|count - LED control");
