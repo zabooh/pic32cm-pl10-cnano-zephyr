@@ -243,3 +243,13 @@ set out to highlight.
 - `app/prj.conf` — a note explaining why `CONFIG_PM` is intentionally absent.
 - `app/src/led_ctrl.c` — the `led count` liveness counter used to verify the
   scheduler across naps.
+
+## 9. Fuses and standby current
+
+The dominant standby-current lever is a **software** bit, not a fuse:
+`SUPC.VREG.RUNSTDBY` swings the typical figure between **2.0 µA** (=0) and
+**190 µA** (=1) — datasheet Table 37-8. Two *fuses* also feed into standby current,
+though: **BODCFG** (BOD/VLM boot state — `ENABLE`/`RUNSTDBY`/`VLMLVL`) and
+**WDTCFG** (the WDT runs in any sleep mode). Both are favourable on this board (off).
+The trap: `BODCFG.WRTLOCK` / `WDTCFG.ALWAYSON` can lock an unfavourable state so
+firmware can no longer disable it. Full breakdown in **FUSES.md §8**.

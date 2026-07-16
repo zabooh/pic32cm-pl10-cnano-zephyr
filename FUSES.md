@@ -402,3 +402,66 @@ niedrigster bis höchster LMA → bläht sich um die ~16 MB Lücke ab `0x0c00000
    aus dem gelieferten Hex, Verify über den kompletten Adressraum inkl. `0x0d0004xx`."
 4. Alternative: ein separates `fuses.hex` pflegen und beide Artefakte liefern —
    sauberere Trennung, aber zwei Dateien.
+
+---
+
+## 8. Fuses & Standby-Strom
+
+> Bezug: `STANDBY.md`. Wichtig für Low-Power-Serienabsicherung.
+
+**Der größte Standby-Hebel ist *kein* Fuse, sondern Software.** Table 37-8 (MCU
+Standby Current):
+
+| Param | Bedingung | Typ. Standby-Strom |
+|---|---|---|
+| SPWR_1 | `SUPC.VREG.RUNSTDBY = 0` | **2.0 µA** |
+| SPWR_3 | `SUPC.VREG.RUNSTDBY = 1` | **190 µA** |
+
+Der Faktor ~95× hängt an `SUPC.VREG.RUNSTDBY` — einem **SUPC-Register-Bit, keinem
+Fuse** (BOOTCFG hat kein VREG-Feld). Gehört in `standby.c`, nicht in die Fuses.
+
+**Zwei Fuses gehen aber sehr wohl in den Standby-Strom ein:**
+
+### BODCFG — relevantester Fuse
+
+Der Brown-out-Detector lädt seinen Boot-Zustand aus BODCFG (§15.6.6). Standby-relevant:
+
+| Feld | Wirkung auf Standby | Dieses Board (`0x70FCEE9D`) |
+|---|---|---|
+| ENABLE | BOD an → Grundverbrauch | **0 = aus** |
+| RUNSTDBY | BOD läuft im Standby weiter → zieht durchgehend (§15.4.2.7.1) | **0 = läuft nicht** |
+| STDBYCFG | Standby continuous vs. sampling (continuous zieht mehr) | 0 = continuous |
+| SAMPFREQ | 128 Hz vs. 32 Hz Sampling | 0 = 128 Hz |
+| VLMLVL | Voltage-Level-Monitor an → Zusatzstrom | 00 = aus |
+
+→ Dieses Board ist günstig gefust (BOD + VLM aus).
+
+### WDTCFG — Watchdog läuft in jedem Sleep-Mode
+
+§20.5.2: *„The WDT will continue to operate in any sleep mode."* Der WDT hängt an
+seinem eigenen 32-kHz-Oszillator. `WDTCFG.ENABLE=1` (bzw. `ALWAYSON=1`) → WDT +
+Oszillator laufen im Standby → Zusatzstrom. Dieses Board: `WDTCFG=0xFFF000F1`,
+ENABLE=0 → aus. (`standby.c` schaltet den WDT bewusst selbst ein — als Aufweck-
+Quelle; gewollter Strom, kein Fuse-Effekt.)
+
+### Die Falle: WRTLOCK / ALWAYSON — irreversibel
+
+Das verbindet die „böse Falle" aus §7 mit dem Standby:
+
+- **BODCFG.WRTLOCK** (Bit 31) = 1 → `BODVDD`-Register **eingefroren**: *„Any write …
+  will be discarded and return a bus error if WRTLOCK = 1"* (§15.6.6).
+- **WDTCFG.ALWAYSON** = 1 → WDT per Software **nicht mehr abschaltbar**.
+
+Setzt ein Programmier-Tool die Fuses ungünstig (z. B. **BOD enabled + RUNSTDBY +
+WRTLOCK**), dann steigt der Standby-Strom **und** lässt sich in der Firmware **nicht
+mehr wegkonfigurieren** — `standby.c` läuft gegen einen Bus-Error. Auf diesem Board
+ist `WRTLOCK=0` (Bit 31 von `0x70FCEE9D`) → noch software-änderbar. Genau deshalb
+sollte man die Fuses für die Serie explizit definieren (§7).
+
+### Fazit
+
+- **Größter Effekt:** `SUPC.VREG.RUNSTDBY` (2 µA ↔ 190 µA) — Software, nicht Fuse.
+- **Fuses mit Standby-Wirkung:** BODCFG (BOD/VLM) und WDTCFG (WDT im Sleep) — beide
+  hier günstig (aus).
+- **Gefahr:** `BODCFG.WRTLOCK` / `WDTCFG.ALWAYSON` können einen ungünstigen Zustand
+  **unwiderruflich** machen.
