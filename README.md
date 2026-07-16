@@ -57,9 +57,10 @@ an 8 KB-RAM microcontroller**, or does it need a beefier part to be worth using?
 - Interactive serial commands: `led on/off/toggle/blink <ms>`, `adc read`,
   `adc stream start/stop`, `button` (read the SW0 user button), `load on/off` (hold the CPU
   busy to make the idle-vs-active current draw visible on a meter),
-  `standby <s>` (drop the SoC into PM Standby at ~2 µA and wake it after `<s>` seconds via
-  the RTC — the PL10's headline low-power mode, driven directly since Zephyr has no PM port
-  for this part yet), `reset`,
+  `standby <s>` (drop the SoC into real ~2 µA Standby for `<s>` seconds, then reboot on
+  wake — the PL10's headline low-power mode, driven directly since Zephyr has no PM port for
+  this part yet; it reboots rather than resuming in place, see [STANDBY.md](STANDBY.md) for
+  why), `reset`,
   `threads` (live per-thread stack usage), `mem <addr>` (raw hex dump), `help` — with a
   hand-rolled line editor featuring bash-style Up/Down command history, and a boot banner
   stamped with the build time
@@ -178,10 +179,15 @@ button: released
 pl10:~$ button: pressed      <-- printed on its own when you press SW0
 button: released
 pl10:~$ standby 5
-standby: entering Standby (~2 uA), RTC wake in 5 s...
-standby: woke after 5 s (RTC compare match)   <-- 5 s later, RTC pulls it out
+standby: Standby (~2 uA) for 5 s, then reboot...
+*** Booting Zephyr OS build v4.4.0-... ***      <-- ~5 s later: wakes itself, reboots clean
+PIC32CM PL10 Blinky - built ...
 pl10:~$ reset
 ```
+
+(`standby` reboots on wake rather than resuming in place — that's deliberate and reliable;
+[STANDBY.md](STANDBY.md) explains why resume-in-place isn't achievable without an upstream
+PL10 PM driver.)
 
 (On the bare board the ADC input pin floats, so `adc read` returns noisy values near the
 supply rail — that's expected, it confirms the ADC is actually converting.)
@@ -192,7 +198,7 @@ Don't have a set-up machine yet? See [Reproducing this setup elsewhere](#reprodu
 
 | Path | Purpose |
 |---|---|
-| `app/` | The application: `CMakeLists.txt`, `prj.conf`, `app.overlay` (SW0 user-button node + `led0` active-low polarity fix), `cmd_sections.ld` (command-registry linker section), and `src/` split one module per domain — `main.c` (startup wiring), `led_ctrl.c` (LED + blink thread + `led` command), `pl10_adc.c` (ADC driver + stream thread + `adc` command), `button.c` (SW0 read + press-notifier thread + `button` command), `cmd_parser.c` (console infrastructure: line editor, history, registry dispatch), `cmd.h` (command-registry interface), `diag.c` (`reset`/`threads`/`mem` commands), `load.c` (CPU-load generator + `load` command), `standby.c` (RTC-wake PM Standby + `standby` command), `fault.c` (fatal-error handler), `app_threads.h` (central thread stack/priority budgets) |
+| `app/` | The application: `CMakeLists.txt`, `prj.conf`, `app.overlay` (SW0 user-button node + `led0` active-low polarity fix), `cmd_sections.ld` (command-registry linker section), and `src/` split one module per domain — `main.c` (startup wiring), `led_ctrl.c` (LED + blink thread + `led` command), `pl10_adc.c` (ADC driver + stream thread + `adc` command), `button.c` (SW0 read + press-notifier thread + `button` command), `cmd_parser.c` (console infrastructure: line editor, history, registry dispatch), `cmd.h` (command-registry interface), `diag.c` (`reset`/`threads`/`mem` commands), `load.c` (CPU-load generator + `load` command), `standby.c` (~2 µA Standby + reboot-on-wake, `standby` command — see [STANDBY.md](STANDBY.md)), `fault.c` (fatal-error handler), `app_threads.h` (central thread stack/priority budgets) |
 | `zephyr/` | Zephyr RTOS source (shallow clone, pinned revision) |
 | `modules/` | Only the HAL/library modules actually needed: `hal_microchip`, `cmsis`, `cmsis_6`, `picolibc` |
 | `build/` | CMake/Ninja build output; `build/zephyr/zephyr.hex` is the flashable artifact |
@@ -576,6 +582,10 @@ stays about getting the board running. What's in there:
   — the PL10 has only Idle + Standby (no RAM-wiping deep sleep); both retain SRAM and resume
   after `WFI` without a reset, so wake is 24–120 µs, not a reboot. Plus the current-vs-latency
   knob, and how to survive a true reset/power loss (`RCAUSE` + Flash).
+- **[PM Standby, and why the `standby` command reboots on wake](STANDBY.md)** — the full
+  story behind the `standby <s>` command: the ~2 µA direct-register Standby, why a
+  resume-in-place Zephyr PM port isn't achievable on the PL10 without an upstream driver (the
+  kernel tick dies after the nap), and the reboot-on-wake design that ships instead.
 - **[PIC32CM PL10 device series](DEEPDIVE.md#pic32cm-pl10-device-series)** — the wider
   family (3204/6408/1216), package options, and full orderable part numbers.
 - **[Porting to another PL10 device](DEEPDIVE.md#porting-to-another-pl10-device)** — effort
