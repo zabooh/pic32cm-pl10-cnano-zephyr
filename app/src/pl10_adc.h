@@ -27,4 +27,9 @@ void pl10_adc_read_once(void);
  * one formatted result every PL10_ADC_STREAM_PERIOD_MS. */
 void pl10_adc_stream_set(bool enable);
 
+/* Power the ADC down (clear ADC0.ENABLE) so its ~0.9 mA analog bias stops. The
+ * low-power/standby path calls this before gating clocks; the next read re-inits
+ * lazily. Safe to call when the ADC was never used. */
+void pl10_adc_disable(void);
+
 #endif /* PL10_ADC_H_ */

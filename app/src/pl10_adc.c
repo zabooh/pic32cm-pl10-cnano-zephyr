@@ -156,6 +156,23 @@ void pl10_adc_stream_set(bool enable)
     }
 }
 
+/*
+ * Power the ADC down. `adc stream stop` only stops sampling - it leaves ADC0
+ * ENABLEd, and that analog block keeps drawing ~0.9 mA of bias current until the
+ * next reboot (measured on the current rail). The low-power (standby) path calls
+ * this so that bias is actually removed; the next read re-inits lazily via
+ * ensure_adc_ready(). Must run BEFORE the ADC0 APB clock is gated (a gated APB
+ * would swallow the ENABLE-clear write).
+ */
+void pl10_adc_disable(void)
+{
+    adc_streaming = false;
+    if (adc_ready) {
+        ADC0_REGS->ADC_CTRLA &= ~ADC_CTRLA_ENABLE_Msk;
+        adc_ready = false;
+    }
+}
+
 /* --- console command ---------------------------------------------------- */
 
 static void adc_cmd(int argc, char **argv)

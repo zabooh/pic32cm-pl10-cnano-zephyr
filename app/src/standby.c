@@ -38,6 +38,7 @@
 
 #include "cmd.h"
 #include "led_ctrl.h"
+#include "pl10_adc.h"
 
 /* GCLK peripheral-channel index of the console SERCOM1 core clock (silicon-fixed;
  * cross-checked against Harmony plib_clock.c). */
@@ -122,6 +123,10 @@ static void wdt_arm_ew(uint32_t remaining_counts)
  * No restore: the command reboots on wake. */
 static void standby_quiesce(void)
 {
+    /* Power the ADC down first - its ~0.9 mA analog bias is not gated by the APB
+     * mask, so it must be switched off BEFORE we clear APBCMASK below. */
+    pl10_adc_disable();
+
     MCLK_REGS->MCLK_APBCMASK = 0U; /* gate the console SERCOM's APB clock */
     GCLK_REGS->GCLK_PCHCTRL[GCLK_ID_SERCOM1_CORE] &= ~GCLK_PCHCTRL_CHEN_Msk;
 
