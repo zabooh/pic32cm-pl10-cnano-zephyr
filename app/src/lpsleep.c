@@ -1,34 +1,38 @@
 /*
- * lpsleep.c - "lpsleep <s>": REAL low-power sleep with OSCHF actually switched
- * off, resume-in-place (no reboot).
+ * lpsleep.c - "lpsleep <s>": run-time deep low-power sleep that implements ALL of
+ * the datasheet's ~2 uA Standby conditions, with resume in place (no reboot).
  *
- * WHY THIS EXISTS
- * The shipped `standby` only reaches the debugger-halt level (~15.9 mA), never
- * the reset floor (~12 mA), because OSCHF keeps running the whole time: GCLK0 (the
- * CPU clock generator) is sourced from OSCHF, so it *requests* OSCHF continuously,
- * and OSCHF is an ONDEMAND-only oscillator (no ENABLE bit) - it can only stop when
- * nothing requests it. So the ~4 mA of OSCHF is never removed.
+ * THE JOURNEY (why this is the shape it is)
+ * The shipped `standby` never drops below the ~15.8 mA debugger-halt level. We
+ * chased why through a long measured investigation (see strommessung.md); the two
+ * findings that matter:
  *
- * THE FIX (what the user asked for)
- * Move the CPU clock off OSCHF before sleeping: switch GCLK0's source from OSCHF
- * to the internal 32.768 kHz OSC32K - the same oscillator that clocks the RTC, and
- * fully independent of OSCHF. Then:
- *   - OSCHF has no requester -> ONDEMAND stops it -> the ~4 mA drops.
- *   - The core keeps running, just at 32 kHz (never loses its clock, unlike the
- *     old CONFIG_PM path that gated OSCHF out from under a still-OSCHF core).
- *   - The RTC (on OSC32K) keeps counting and its compare interrupt wakes the core.
- *   - On wake the core is already running on OSC32K; we then switch GCLK0 back to
- *     OSCHF (writing the source re-requests OSCHF, which restarts) and continue.
+ * 1. ROOT CAUSE - OSCHF was never gateable. The SoC devicetree configures OSCHF
+ *    at OSCHFCTRL.ONDEMAND=0 (free-running), so it runs forever no matter what -
+ *    no sleep mode and no clock trick can stop it. Confirmed with the `oschftest`
+ *    probe: OSCHFRDY stays 1 with no requester, and only flips to 0 once we set
+ *    ONDEMAND=1. This is why standby/sbq/genoff all stuck at the same floor.
  *
- * Datasheet: OSC32K is request-started, no ENABLE needed, ONDEMAND=1 by reset
- * (13.4.2.1 / 13.6.10); OSCHF is ONDEMAND-only, so removing all requesters stops
- * it. Plain WFI/IDLE is used (not STANDBY) - OSCHF-off is governed by the request,
- * not the sleep mode, and IDLE keeps the RTC running to guarantee the wake.
+ * 2. So lpsleep does the full recipe: set OSCHF ONDEMAND=1, move GCLK0 (the CPU
+ *    clock) off OSCHF onto the internal 32.768 kHz OSC32K (independent of OSCHF and
+ *    the RTC's clock), which lets OSCHF stop AND engages the ULP regulator
+ *    (SUPC.VREG.RUNSTDBY=0 switches LDO->ULP when running on 32 kHz). It then
+ *    enters STANDBY, masks all APB clocks except PM/MCLK/clock-controllers/RTC
+ *    (AHBMASK is already 0x3FF), and disables every pin input buffer - i.e. every
+ *    condition in datasheet Table 37-8. The free-running RTC compare (on OSC32K)
+ *    wakes it; it switches GCLK0 back to OSCHF, restores everything, and continues.
  *
- * CAVEAT: SysTick is stopped and interrupts are locked across the nap, so the
- * Zephyr kernel tick does not advance during it (k_uptime/timers lag by ~<s> s
- * afterwards). Fine for a low-power demo/measurement; a real resume-in-place PM
- * driver would hand the lost ticks back to the kernel.
+ * MEASURED OUTCOME (POWER-Z KM003C, USB rail): even with all of the above, the
+ * board stays at ~15.83 mA - identical to standby. OSCHF turned out to be only
+ * ~0.44 mA; the rest of the halt->reset-floor gap is the on-board nEDBG debugger,
+ * a fixed board floor firmware cannot touch. Whether the *target* reaches the
+ * datasheet ~2 uA can only be seen by metering the isolated target rail (cut J201);
+ * from USB, ~15.8 mA is the wall. The target is now configured correctly for it.
+ *
+ * CAVEAT: interrupts are locked across the nap and the tickless SysTick is not
+ * handed the elapsed time, so the Zephyr kernel tick does not advance - k_sleep
+ * threads (blink) freeze on wake though the console stays alive. Experimental /
+ * measurement command; a real resume-in-place PM driver would fix the tick.
  */
 #include <zephyr/kernel.h>
 #include <zephyr/irq.h>
@@ -42,6 +46,30 @@
 
 #define OSC32K_HZ 32768U       /* nominal OSC32K rate (RC, approximate) */
 #define LPSLEEP_MAX_SEC 600U
+
+/* Save every pin's config and disable its input buffer (INEN) - the datasheet
+ * "I/Os in inactive input mode" condition; stops crowbar current on any floating
+ * input. Fully restored on wake so the console/button/LED work again. */
+static uint8_t pincfg_save[2][32];
+
+static void io_quiesce(void)
+{
+    for (int g = 0; g < 2; g++) {
+        for (int p = 0; p < 32; p++) {
+            pincfg_save[g][p] = PORT_REGS->GROUP[g].PORT_PINCFG[p];
+            PORT_REGS->GROUP[g].PORT_PINCFG[p] &= (uint8_t)~PORT_PINCFG_INEN_Msk;
+        }
+    }
+}
+
+static void io_restore(void)
+{
+    for (int g = 0; g < 2; g++) {
+        for (int p = 0; p < 32; p++) {
+            PORT_REGS->GROUP[g].PORT_PINCFG[p] = pincfg_save[g][p];
+        }
+    }
+}
 
 static void gclk0_set_src(uint32_t src_val)
 {
@@ -141,6 +169,21 @@ static void lpsleep_cmd(int argc, char **argv)
     }
     SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
 
+    /* Full-standby clock gating - the datasheet ~2 uA conditions (Table 37-8): mask
+     * every APB clock except what we need to wake and resume (PM/MCLK, the clock
+     * controllers used by the wake sequence, and the RTC). AHBMASK is already 0x3FF. */
+    uint32_t apba_save = MCLK_REGS->MCLK_APBAMASK;
+    uint32_t apbb_save = MCLK_REGS->MCLK_APBBMASK;
+    uint32_t apbc_save = MCLK_REGS->MCLK_APBCMASK;
+    MCLK_REGS->MCLK_APBAMASK = MCLK_APBAMASK_PM_Msk | MCLK_APBAMASK_MCLK_Msk |
+                               MCLK_APBAMASK_OSCCTRL_Msk | MCLK_APBAMASK_OSC32KCTRL_Msk |
+                               MCLK_APBAMASK_SUPC_Msk | MCLK_APBAMASK_GCLK_Msk |
+                               MCLK_APBAMASK_RTC_Msk;
+    MCLK_REGS->MCLK_APBBMASK = MCLK_APBBMASK_NVMCTRL_Msk;
+    MCLK_REGS->MCLK_APBCMASK = 0U;
+
+    io_quiesce(); /* disable all pin input buffers (last ~2 uA condition) */
+
     for (;;) {
         if (RTC_REGS->MODE0.RTC_INTFLAG & RTC_MODE0_INTFLAG_CMP0_Msk) {
             break;
@@ -152,6 +195,12 @@ static void lpsleep_cmd(int argc, char **argv)
         __WFI();
     }
     RTC_REGS->MODE0.RTC_INTFLAG = RTC_MODE0_INTFLAG_CMP0_Msk;
+
+    /* Restore the peripheral clocks and pin configs before touching anything else. */
+    MCLK_REGS->MCLK_APBAMASK = apba_save;
+    MCLK_REGS->MCLK_APBBMASK = apbb_save;
+    MCLK_REGS->MCLK_APBCMASK = apbc_save;
+    io_restore();
 
     /* Leave deep sleep. */
     SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
