@@ -5,10 +5,33 @@ the design journey behind it, why it takes the shape it does, and what would let
 it be done "properly" in the future. It complements the short reference in
 `README.md` and the essays in `DEEPDIVE.md`.
 
-If you only want the summary: **`standby <s>` drops the SoC into real ~2 µA
-Standby, waits ~`<s>` seconds on the SoC's own low-power timer, and then reboots
-the board.** It is a self-contained, direct-register stopgap because mainline
+If you only want the summary: **`standby <s>` puts the SoC into its `SLEEPCFG=STANDBY`
+low-power sleep, waits ~`<s>` seconds on the SoC's own low-power timer, and then
+reboots the board.** It is a self-contained, direct-register stopgap because mainline
 Zephyr has no power-management driver for this SoC yet.
+
+---
+
+> ## ⚠️ Measured-result correction (2026-07-17, POWER-Z KM003C)
+>
+> **The "~2 µA" figure below was NOT reproduced on the current build and is likely
+> stale.** A methodical current sweep (see `strommessung.md` / `sleeptest_matrix.png`)
+> found that on this board, from the USB rail, `standby` reaches **~15.9 mA — exactly
+> the "null-lage" / debugger-halt level (CPU stopped, SERCOM gated, but OSCHF still
+> running)**, and NOT the reset floor (~12 mA). Key facts:
+> - The `SLEEPCFG=STANDBY` + `SLEEPDEEP` bits alone change nothing (idle = idledeep =
+>   sb0 ≈ 17.2 mA). Only the **clock-tree quiesce** (gating SERCOM/APBC) saves ~1.4 mA,
+>   landing at the halt level.
+> - **No software configuration reaches deep Standby.** Even stopping GCLK0 (the CPU
+>   clock generator) stays at ~15.9 mA — OSCHF is never actually gated, so the ~4 mA
+>   OSCHF/clock-tree between the halt level and the reset floor is never removed.
+> - The genuine ~2 µA was only ever measured on the OLD `CONFIG_PM` path
+>   (`pm.c`/`rtc_lpm.c`, since deleted). For the shipped direct-register version, treat
+>   the µA claims in this document as ASPIRATIONAL, not measured. True µA on this eval
+>   board requires an upstream PL10 PM driver (or metering the isolated target rail
+>   via J201, where the nEDBG floor is removed).
+> - Separately, `pl10_adc.c` does **not** power the ADC down after use (`adc read` /
+>   `adc stream stop` leave ~+0.9 mA until the next reboot).
 
 ---
 

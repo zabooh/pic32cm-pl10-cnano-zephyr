@@ -13,3 +13,9 @@
 # Convenience zip for the pre-git reproduction flow - redundant now that this
 # directory itself is a git repo (clone instead of extract-and-run).
 /pic32cm-pl10-reproduction.zip
+
+# Raw current-measurement captures (POWER-Z KM003C) and the plot they generate -
+# large/regenerable; the analysis lives in strommessung.md + the committed PNGs.
+/user data.csv
+/stromverlauf_smooth.csv
+/stromverlauf.png

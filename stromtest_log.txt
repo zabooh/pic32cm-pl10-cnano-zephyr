@@ -1,0 +1,137 @@
+[   0.3s 23:38:12] ==== SWEEP START ==== (Sync-Burst: 3x load on/off)
+[   0.3s 23:38:12] CMD  load on
+[   1.4s 23:38:13] CMD  load off
+[   2.4s 23:38:14] CMD  load on
+[   3.4s 23:38:15] CMD  load off
+[   4.4s 23:38:16] CMD  load on
+[   5.5s 23:38:17] CMD  load off
+[   6.5s 23:38:18] [nach Sync 4s]
+[  10.7s 23:38:22] ==== REFERENZEN ====
+[  10.7s 23:38:22] CMD  load on
+[  10.7s 23:38:22] [LOAD ON ref 6s]
+[  16.8s 23:38:28] CMD  load off
+[  16.8s 23:38:28] [idle ref 4s]
+[  20.9s 23:38:32] CMD  led off
+[  20.9s 23:38:32] [LED-off idle ref 6s]
+[  27.1s 23:38:39] CMD  led blink 500
+[  27.1s 23:38:39] [blink restored 4s]
+[  31.3s 23:38:43] ==== EXPERIMENT stest off  (recover=ext) ====
+[  31.3s 23:38:43] CMD  stest off
+[  32.5s 23:38:44]    resp: stest off / stest: mode=off sleepdeep=1 pm=4 gate=1 wake=NONE(ext-reset-only) / stest: core will sta
+[  32.5s 23:38:44]    [Plateau ~12s, Konsole tot]
+[  44.5s 23:38:56]    -> pyocd reset (ext. Reset)
+[  47.3s 23:38:59]    -> REBOOT erkannt (Banner)
+[  47.3s 23:38:59] CMD  led count
+[  49.1s 23:39:01]    liveness: led count / led toggles: 0 / pl10:~$
+[  49.1s 23:39:01] [nach Experiment 6s]
+[  55.2s 23:39:07] ==== EXPERIMENT stest sbq  (recover=wdt) ====
+[  55.2s 23:39:07] CMD  stest sbq
+[  56.3s 23:39:08]    resp: stest sbq / stest: mode=sbq sleepdeep=1 pm=4 gate=1 wake=wdt-reset /
+[  63.5s 23:39:15]    -> REBOOT erkannt (Banner)
+[  63.5s 23:39:15] CMD  led count
+[  65.3s 23:39:17]    liveness: led count / led toggles: 0 / pl10:~$
+[  65.3s 23:39:17] [nach Experiment 6s]
+[  71.3s 23:39:23] ==== EXPERIMENT stest idle  (recover=wdt) ====
+[  71.3s 23:39:23] CMD  stest idle
+[  72.5s 23:39:24]    resp: stest idle / stest: mode=idle sleepdeep=0 pm=2 gate=0 wake=wdt-reset /
+[  79.5s 23:39:31]    -> REBOOT erkannt (Banner)
+[  79.5s 23:39:31] CMD  led count
+[  81.2s 23:39:33]    liveness: led count / led toggles: 0 / pl10:~$
+[  81.2s 23:39:33] [nach Experiment 6s]
+[  87.5s 23:39:39] ==== EXPERIMENT stest idledeep  (recover=wdt) ====
+[  87.5s 23:39:39] CMD  stest idledeep
+[  88.7s 23:39:40]    resp: stest idledeep / stest: mode=idledeep sleepdeep=1 pm=2 gate=0 wake=wdt-reset /
+[  95.7s 23:39:47]    -> REBOOT erkannt (Banner)
+[  95.7s 23:39:47] CMD  led count
+[  97.4s 23:39:49]    liveness: led count / led toggles: 0 / pl10:~$
+[  97.4s 23:39:49] [nach Experiment 6s]
+[ 103.6s 23:39:55] ==== EXPERIMENT stest sb0  (recover=wdt) ====
+[ 103.6s 23:39:55] CMD  stest sb0
+[ 104.8s 23:39:56]    resp: stest sb0 / stest: mode=sb0 sleepdeep=1 pm=4 gate=0 wake=wdt-reset /
+[ 112.0s 23:40:03]    -> REBOOT erkannt (Banner)
+[ 112.0s 23:40:03] CMD  led count
+[ 113.7s 23:40:05]    liveness: led count / led toggles: 0 / pl10:~$
+[ 113.7s 23:40:05] [nach Experiment 6s]
+[ 119.8s 23:40:11] ==== EXPERIMENT stest genoff  (recover=wdt) ====
+[ 119.8s 23:40:11] CMD  stest genoff
+[ 121.0s 23:40:12]    resp: stest genoff / stest: mode=genoff sleepdeep=1 pm=4 gate=2 wake=wdt-reset /
+[ 128.0s 23:40:20]    -> REBOOT erkannt (Banner)
+[ 128.0s 23:40:20] CMD  led count
+[ 129.8s 23:40:21]    liveness: led count / led toggles: 0 / pl10:~$
+[ 129.8s 23:40:21] [nach Experiment 6s]
+[ 136.0s 23:40:28] ==== Vergleich: original 'standby 8' ====
+[ 136.0s 23:40:28] CMD  standby 8
+[ 144.9s 23:40:36]    -> REBOOT erkannt (Banner)
+[ 144.9s 23:40:36] CMD  led count
+[ 146.7s 23:40:38]    liveness: led count / led toggles: 0 / pl10:~$
+[ 146.7s 23:40:38] [nach standby 6s]
+[ 152.7s 23:40:44] ==== PASS 2 (Wiederholung Kernfaelle) ====
+[ 152.7s 23:40:44] ==== EXPERIMENT stest off  (recover=ext) ====
+[ 152.7s 23:40:44] CMD  stest off
+[ 153.9s 23:40:45]    resp: stest off / stest: mode=off sleepdeep=1 pm=4 gate=1 wake=NONE(ext-reset-only) / stest: core will sta
+[ 153.9s 23:40:45]    [Plateau ~12s, Konsole tot]
+[ 166.1s 23:40:58]    -> pyocd reset (ext. Reset)
+[ 168.9s 23:41:00]    -> REBOOT erkannt (Banner)
+[ 168.9s 23:41:00] CMD  led count
+[ 170.7s 23:41:02]    liveness: led count / led toggles: 0 / pl10:~$
+[ 170.7s 23:41:02] [nach Experiment 6s]
+[ 176.8s 23:41:08] ==== EXPERIMENT stest sbq  (recover=wdt) ====
+[ 176.8s 23:41:08] CMD  stest sbq
+[ 177.9s 23:41:09]    resp: stest sbq / stest: mode=sbq sleepdeep=1 pm=4 gate=1 wake=wdt-reset /
+[ 185.0s 23:41:17]    -> REBOOT erkannt (Banner)
+[ 185.0s 23:41:17] CMD  led count
+[ 186.8s 23:41:18]    liveness: led count / led toggles: 0 / pl10:~$
+[ 186.8s 23:41:18] [nach Experiment 6s]
+[ 192.8s 23:41:24] ==== EXPERIMENT stest idle  (recover=wdt) ====
+[ 192.8s 23:41:24] CMD  stest idle
+[ 194.0s 23:41:26]    resp: stest idle / stest: mode=idle sleepdeep=0 pm=2 gate=0 wake=wdt-reset /
+[ 201.0s 23:41:33]    -> REBOOT erkannt (Banner)
+[ 201.0s 23:41:33] CMD  led count
+[ 202.8s 23:41:34]    liveness: led count / led toggles: 0 / pl10:~$
+[ 202.8s 23:41:34] [nach Experiment 6s]
+[ 208.8s 23:41:40] ==== EXPERIMENT stest sb0  (recover=wdt) ====
+[ 208.8s 23:41:40] CMD  stest sb0
+[ 210.0s 23:41:42]    resp: stest sb0 / stest: mode=sb0 sleepdeep=1 pm=4 gate=0 wake=wdt-reset /
+[ 217.1s 23:41:49]    -> REBOOT erkannt (Banner)
+[ 217.1s 23:41:49] CMD  led count
+[ 218.9s 23:41:50]    liveness: led count / led toggles: 0 / pl10:~$
+[ 218.9s 23:41:50] [nach Experiment 6s]
+[ 225.0s 23:41:57] ==== SWEEP FERTIG ====
+[R2    0.3s 23:43:49] ######## RUNDE 2 START (Sync: 2x load) ########
+[R2    0.3s 23:43:49] CMD  load on
+[R2    1.4s 23:43:50] CMD  load off
+[R2    2.4s 23:43:51] CMD  load on
+[R2    3.4s 23:43:52] CMD  load off
+[R2    8.5s 23:43:58] ==== ADC ====
+[R2    8.5s 23:43:58] CMD  adc read
+[R2   12.7s 23:44:02] CMD  adc stream start
+[R2   20.8s 23:44:10] CMD  adc stream stop
+[R2   24.9s 23:44:14] ==== LED-Anteil (active-low ~1mA) ====
+[R2   24.9s 23:44:14] CMD  led on
+[R2   29.9s 23:44:19] CMD  led off
+[R2   35.0s 23:44:24] CMD  led on
+[R2   40.1s 23:44:29] CMD  led off
+[R2   43.1s 23:44:32] ==== Blink-Rate ====
+[R2   43.1s 23:44:32] CMD  led blink 100
+[R2   49.2s 23:44:38] CMD  led blink 2000
+[R2   57.3s 23:44:46] CMD  led blink 500
+[R2   61.4s 23:44:50] ==== Max: CPU-Last + LED ====
+[R2   61.4s 23:44:50] CMD  load on
+[R2   61.4s 23:44:50] CMD  led on
+[R2   66.5s 23:44:55] CMD  load off
+[R2   66.5s 23:44:55] CMD  led off
+[R2   70.6s 23:45:00] CMD  led blink 500
+[R2   73.6s 23:45:03] ==== Langes stuck-Plateau (stest off, 30s) ====
+[R2   73.6s 23:45:03] CMD  stest off
+[R2   74.6s 23:45:04]    [30s stuck, Konsole tot]
+[R2  107.3s 23:45:36]    pyocd reset (recover)
+[R2  107.5s 23:45:36]    -> REBOOT erkannt
+[R2  112.5s 23:45:42] ==== Reset-Boden-Kartierung (3x Halt-Plateau + Reset) ====
+[R2  114.9s 23:45:44]    pyocd HALT 1 (Plateau ~16mA)
+[R2  121.5s 23:45:51]    pyocd RELEASE 1
+[R2  126.8s 23:45:56]    pyocd HALT 2 (Plateau ~16mA)
+[R2  133.5s 23:46:02]    pyocd RELEASE 2
+[R2  138.7s 23:46:08]    pyocd HALT 3 (Plateau ~16mA)
+[R2  145.4s 23:46:14]    pyocd RELEASE 3
+[R2  154.6s 23:46:24]    -> kein Reboot im Timeout
+[R2  154.6s 23:46:24] ######## RUNDE 2 FERTIG ########
