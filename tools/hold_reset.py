@@ -14,7 +14,6 @@ comes out of reset and runs its firmware again.
 Only one pyOCD client can hold the probe at a time - stop any gdbserver /
 `west flash` / other pyocd first.
 """
-import os
 import subprocess
 import sys
 import time
@@ -26,12 +25,11 @@ FREQ = 100000
 
 
 def boot_target():
-    """Reset the target and let it run - a fresh `pyocd` subprocess, because an
-    in-process reset over the same held session leaves the console SERCOM dead."""
-    exe = os.path.join(os.path.dirname(sys.executable), "pyocd.exe")
-    if not os.path.exists(exe):
-        exe = "pyocd"
-    subprocess.run([exe, "cmd", "-t", TARGET, "-f", str(FREQ),
+    """Reset the target and let it run - via a fresh `pyocd` subprocess, because an
+    in-process reset over the same held session leaves the console SERCOM dead. Uses
+    `<this python> -m pyocd`, which is guaranteed to work: this interpreter already
+    imported pyocd above, so it can always run it as a module (no PATH / .exe hunt)."""
+    subprocess.run([sys.executable, "-m", "pyocd", "cmd", "-t", TARGET, "-f", str(FREQ),
                     "-M", "halt", "-c", "reset", "-c", "go"], capture_output=True)
 
 hold_s = float(sys.argv[1]) if len(sys.argv) > 1 else None
